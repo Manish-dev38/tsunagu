@@ -1,0 +1,17 @@
+import { initTRPC } from "@trpc/server";
+import type { Session } from "next-auth";
+import type { CorsairFake } from "@/server/adapters/corsair";
+import type { LlmFake } from "@/server/adapters/llm";
+import type { Db } from "@/server/db";
+
+export interface Context {
+  db: Db;
+  session: Session | null;
+  corsair: CorsairFake;
+  llm: LlmFake;
+}
+
+const t = initTRPC.context<Context>().create();
+
+export const router = t.router;
+export const publicProcedure = t.procedure;
