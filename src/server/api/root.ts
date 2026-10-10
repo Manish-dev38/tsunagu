@@ -1,8 +1,8 @@
-import { publicProcedure, router } from "./trpc";
+import { protectedProcedure, router } from "./trpc";
 
 export const appRouter = router({
-  me: publicProcedure.query(({ ctx }) => ({
-    tenantId: ctx.session?.user?.id ?? null,
+  me: protectedProcedure.query(({ ctx }) => ({
+    tenantId: ctx.tenantId,
     name: ctx.session?.user?.name ?? null,
   })),
 });

@@ -1,6 +1,6 @@
 import { auth, signIn, signOut } from "@/server/auth";
 
-// auth() reads cookies per request; this route is never prerendered
+// auth() needs cookies per request; allow this route to block on server render
 export const instant = false;
 
 export default async function Home() {

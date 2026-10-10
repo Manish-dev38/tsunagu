@@ -1,4 +1,4 @@
-import { initTRPC } from "@trpc/server";
+import { TRPCError, initTRPC } from "@trpc/server";
 import type { Session } from "next-auth";
 import type { CorsairFake } from "@/server/adapters/corsair";
 import type { LlmFake } from "@/server/adapters/llm";
@@ -15,3 +15,10 @@ const t = initTRPC.context<Context>().create();
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
+
+export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+  if (!ctx.session?.user?.id) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  return next({ ctx: { ...ctx, tenantId: ctx.session.user.id } });
+});

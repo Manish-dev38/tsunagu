@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import { getDb } from "@/server/db";
-import { users } from "@/server/db/schema";
+import { upsertUser } from "@/server/users";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -13,21 +13,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   callbacks: {
     async signIn({ user }) {
-      if (!user.id || !user.email) return false;
-      const db = getDb();
-      await db
-        .insert(users)
-        .values({
-          id: user.id,
-          email: user.email,
-          name: user.name ?? null,
-          image: user.image ?? null,
-        })
-        .onConflictDoUpdate({
-          target: users.id,
-          set: { email: user.email, name: user.name ?? null, image: user.image ?? null },
-        });
-      return true;
+      return upsertUser(getDb(), user);
     },
     async session({ session, token }) {
       if (token.sub && session.user) session.user.id = token.sub;

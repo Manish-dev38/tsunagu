@@ -10,5 +10,8 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     environment: "node",
+    // PGlite cold-boot + migrations are slow on this machine
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
   },
 });
