@@ -1,13 +1,13 @@
-import { TRPCError, initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import type { Session } from "next-auth";
-import type { CorsairFake } from "@/server/adapters/corsair";
+import type { CorsairPort } from "@/server/adapters/corsair";
 import type { LlmFake } from "@/server/adapters/llm";
 import type { Db } from "@/server/db";
 
 export interface Context {
   db: Db;
   session: Session | null;
-  corsair: CorsairFake;
+  corsair: CorsairPort;
   llm: LlmFake;
 }
 
