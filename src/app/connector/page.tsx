@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { ConnectorPlugin } from "@/server/adapters/corsair";
+import { CONNECTORS, type ConnectionStatus, type Connector } from "@/server/adapters/corsair";
 import { api } from "@/trpc/provider";
 
-const LABELS: Record<ConnectorPlugin, string> = {
+const LABELS: Record<Connector, string> = {
   gmail: "Gmail",
   googlecalendar: "Google Calendar",
 };
@@ -29,6 +29,12 @@ export default function ConnectorPage() {
     onError: (e) => setError(e.message),
   });
 
+  const onToggle = (connector: Connector, isConnected: boolean) => {
+    setError(null);
+    if (isConnected) disconnect.mutate({ connector });
+    else connect.mutate({ connector });
+  };
+
   if (list.isPending) return <p className="text-sm text-neutral-500">Loading…</p>;
 
   if (list.error) {
@@ -40,35 +46,35 @@ export default function ConnectorPage() {
     );
   }
 
+  const status: ConnectionStatus = list.data;
+
   return (
     <div>
       <h1 className="mb-4 text-xl font-semibold">Connectors</h1>
       <ul>
-        {Object.entries(list.data).map(([plugin, state]) => (
-          <li key={plugin} className="flex items-center justify-between border-b border-neutral-200 py-3">
-            <span className="font-medium">{LABELS[plugin as ConnectorPlugin] ?? plugin}</span>
-            <span className="flex items-center gap-4">
-              <span className="text-sm text-neutral-500">{state}</span>
-              {state === "connected" ? (
+        {CONNECTORS.map((connector) => {
+          const state = status[connector] ?? "not_connected";
+          const isConnected = state === "connected";
+          return (
+            <li key={connector} className="flex items-center justify-between border-b border-neutral-200 py-3">
+              <span className="font-medium">{LABELS[connector]}</span>
+              <span className="flex items-center gap-4">
+                <span className="text-sm text-neutral-500">{state}</span>
                 <button
-                  className="rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100"
-                  onClick={() => disconnect.mutate({ plugin: plugin as ConnectorPlugin })}
-                  disabled={disconnect.isPending}
+                  className={
+                    isConnected
+                      ? "rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100"
+                      : "rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-700"
+                  }
+                  disabled={connect.isPending || disconnect.isPending}
+                  onClick={() => onToggle(connector, isConnected)}
                 >
-                  Disconnect
+                  {isConnected ? "Disconnect" : "Connect"}
                 </button>
-              ) : (
-                <button
-                  className="rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-700"
-                  onClick={() => connect.mutate({ plugin: plugin as ConnectorPlugin })}
-                  disabled={connect.isPending}
-                >
-                  Connect
-                </button>
-              )}
-            </span>
-          </li>
-        ))}
+              </span>
+            </li>
+          );
+        })}
       </ul>
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
     </div>

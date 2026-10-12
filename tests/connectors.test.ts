@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { appRouter } from "@/server/api/root";
-import { CorsairFake } from "@/server/adapters/corsair";
+import { CorsairFake, type Connector } from "@/server/adapters/corsair";
 import { LlmFake } from "@/server/adapters/llm";
 import { type Db, createTestDb } from "@/server/db";
 
@@ -9,6 +9,11 @@ function makeCaller(tenantId: string | null, db: Db, corsair: CorsairFake) {
     ? { user: { id: tenantId, name: "Tester", email: "t@example.com", image: null }, expires: "2099-01-01T00:00:00.000Z" }
     : null;
   return appRouter.createCaller({ db, session, corsair, llm: new LlmFake() });
+}
+
+async function approve(corsair: CorsairFake, tenantId: string, connector: Connector) {
+  await corsair.createConnectLink(tenantId, connector);
+  corsair.simulateHubApproval(tenantId, connector);
 }
 
 describe("router seam: connectors", () => {
@@ -30,27 +35,29 @@ describe("router seam: connectors", () => {
     const corsair = new CorsairFake();
     const caller = makeCaller("tenant_a", db, corsair);
 
-    const { url } = await caller.connectors.connectUrl({ plugin: "gmail" });
-    expect(url).toContain("hub");
+    const { url } = await caller.connectors.connectUrl({ connector: "gmail" });
+    expect(url).toContain("tenant_a");
     await expect(caller.connectors.list()).resolves.toEqual({
       gmail: "not_connected",
       googlecalendar: "not_connected",
     });
 
-    corsair.simulateHubApproval("tenant_a", "gmail");
+    expect(corsair.simulateHubApproval("tenant_a", "gmail")).toBe(true);
     await expect(caller.connectors.list()).resolves.toEqual({
       gmail: "connected",
       googlecalendar: "not_connected",
     });
+
+    expect(corsair.simulateHubApproval("tenant_a", "googlecalendar")).toBe(false);
   });
 
   it("disconnect removes only that connector", async () => {
     const corsair = new CorsairFake();
-    corsair.simulateHubApproval("tenant_b", "gmail");
-    corsair.simulateHubApproval("tenant_b", "googlecalendar");
+    await approve(corsair, "tenant_b", "gmail");
+    await approve(corsair, "tenant_b", "googlecalendar");
     const caller = makeCaller("tenant_b", db, corsair);
 
-    await caller.connectors.disconnect({ plugin: "gmail" });
+    await caller.connectors.disconnect({ connector: "gmail" });
     await expect(caller.connectors.list()).resolves.toEqual({
       gmail: "not_connected",
       googlecalendar: "connected",
@@ -59,7 +66,7 @@ describe("router seam: connectors", () => {
 
   it("tenants cannot see each other's connections", async () => {
     const corsair = new CorsairFake();
-    corsair.simulateHubApproval("tenant_a", "gmail");
+    await approve(corsair, "tenant_a", "gmail");
 
     await expect(makeCaller("tenant_c", db, corsair).connectors.list()).resolves.toEqual({
       gmail: "not_connected",
@@ -67,9 +74,23 @@ describe("router seam: connectors", () => {
     });
   });
 
-  it("rejects an unknown plugin", async () => {
+  it("one tenant's disconnect cannot drop another tenant's connection", async () => {
+    const corsair = new CorsairFake();
+    await approve(corsair, "tenant_a", "gmail");
+
+    const intruder = makeCaller("tenant_c", db, corsair);
+    await expect(intruder.connectors.disconnect({ connector: "gmail" })).resolves.toEqual({
+      disconnected: false,
+    });
+    await expect(makeCaller("tenant_a", db, corsair).connectors.list()).resolves.toEqual({
+      gmail: "connected",
+      googlecalendar: "not_connected",
+    });
+  });
+
+  it("rejects an unknown connector", async () => {
     const caller = makeCaller("tenant_a", db, new CorsairFake());
-    await expect(caller.connectors.connectUrl({ plugin: "slack" as never })).rejects.toMatchObject({
+    await expect(caller.connectors.connectUrl({ connector: "slack" as never })).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
   });
