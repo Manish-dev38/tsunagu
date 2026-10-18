@@ -1,9 +1,12 @@
 import { auth, signIn, signOut } from "@/server/auth";
+import { connection } from "next/server";
 
-// auth() needs cookies per request; allow this route to block on server render
+// Blocking route: auth() verifies the session JWT (crypto.getRandomValues) per request,
+// which cannot be baked into a prerendered shell (Cache Components + Instant Navigations)
 export const instant = false;
 
 export default async function Home() {
+  await connection();
   const session = await auth();
 
   if (!session?.user) {

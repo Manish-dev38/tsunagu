@@ -11,6 +11,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
   session: { strategy: "jwt" },
+  trustHost: true,
   callbacks: {
     async signIn({ user }) {
       return upsertUser(getDb(), user);
