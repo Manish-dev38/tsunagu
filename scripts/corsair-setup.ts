@@ -50,7 +50,9 @@ function required(name: string): string {
   return value;
 }
 
-const pool = new Pool({ connectionString: required("DATABASE_URL") });
+// DDL is an admin/migration task: Neon skill says use the direct (unpooled) URL.
+const connectionString = process.env.DATABASE_URL_UNPOOLED ?? required("DATABASE_URL");
+const pool = new Pool({ connectionString });
 
 for (const statement of DDL) await pool.query(statement);
 

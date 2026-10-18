@@ -2,6 +2,7 @@
   "name": "tsunagu",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,13 +11,15 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "node scripts/migrate.ts",
+    "db:migrate": "node --env-file-if-exists=.env scripts/migrate.ts",
     "corsair:setup": "node --env-file-if-exists=.env scripts/corsair-setup.ts"
   },
   "dependencies": {
     "@corsair-dev/gmail": "^0.1.7",
     "@corsair-dev/googlecalendar": "^0.1.8",
     "@electric-sql/pglite": "^0.5.8",
+    "@neon/config": "^1.9.2",
+    "@neon/env": "^1.6.3",
     "@tanstack/react-query": "^5.104.1",
     "@trpc/client": "^11.19.0",
     "@trpc/react-query": "^11.19.0",
