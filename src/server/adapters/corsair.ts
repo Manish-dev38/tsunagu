@@ -31,6 +31,24 @@ export interface SyncResult {
   deleted: number;
 }
 
+export function isUnread(message: CachedMessage): boolean {
+  return message.labelIds.includes("UNREAD");
+}
+
+export function applyListOptions(messages: CachedMessage[], opts: ListMessagesOptions): CachedMessage[] {
+  const { filter = "all", query, limit = 50, offset = 0 } = opts;
+  let result = messages;
+  if (filter === "unread") result = result.filter(isUnread);
+  if (query) {
+    const q = query.toLowerCase();
+    result = result.filter((m) =>
+      [m.subject, m.from, m.snippet, m.body].some((field) => field.toLowerCase().includes(q)),
+    );
+  }
+  result.sort((a, b) => b.internalDate.localeCompare(a.internalDate));
+  return result.slice(offset, offset + limit);
+}
+
 export interface CorsairPort {
   connectionStatus(tenantId: string): Promise<ConnectionStatus>;
   createConnectLink(tenantId: string, connector: Connector): Promise<{ connectUrl: string }>;
@@ -66,23 +84,11 @@ export class CorsairFake implements CorsairPort {
   }
 
   async listCachedMessages(tenantId: string, opts: ListMessagesOptions = {}): Promise<CachedMessage[]> {
-    const { filter = "all", query, limit = 50, offset = 0 } = opts;
-    let messages = [...(this.cache.get(tenantId)?.values() ?? [])];
-    if (filter === "unread") messages = messages.filter((m) => m.labelIds.includes("UNREAD"));
-    if (query) {
-      const q = query.toLowerCase();
-      messages = messages.filter((m) =>
-        [m.subject, m.from, m.snippet, m.body].some((field) => field.toLowerCase().includes(q)),
-      );
-    }
-    messages.sort((a, b) => b.internalDate.localeCompare(a.internalDate));
-    return messages.slice(offset, offset + limit);
+    return applyListOptions([...(this.cache.get(tenantId)?.values() ?? [])], opts);
   }
 
   async cachedUnreadCount(tenantId: string): Promise<number> {
-    return [...(this.cache.get(tenantId)?.values() ?? [])].filter((m) =>
-      m.labelIds.includes("UNREAD"),
-    ).length;
+    return [...(this.cache.get(tenantId)?.values() ?? [])].filter(isUnread).length;
   }
 
   async getCachedMessage(tenantId: string, messageId: string): Promise<CachedMessage | null> {

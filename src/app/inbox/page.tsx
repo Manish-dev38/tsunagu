@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { isUnread } from "@/server/adapters/corsair";
 import { api } from "@/trpc/provider";
 
 export default function InboxPage() {
@@ -20,6 +21,8 @@ export default function InboxPage() {
     onSuccess: () => {
       setRefreshError(null);
       void utils.inbox.list.invalidate();
+      // an open message may have been deleted in Gmail
+      void utils.inbox.message.invalidate();
     },
     onError: (e) => setRefreshError(e.message),
   });
@@ -97,7 +100,7 @@ export default function InboxPage() {
                   <div className="flex items-baseline justify-between gap-2">
                     <span
                       className={`truncate text-sm ${
-                        m.labelIds.includes("UNREAD") ? "font-semibold" : "font-normal"
+                        isUnread(m) ? "font-semibold" : "font-normal"
                       }`}
                     >
                       {m.from}
@@ -108,7 +111,7 @@ export default function InboxPage() {
                   </div>
                   <div
                     className={`truncate text-sm ${
-                      m.labelIds.includes("UNREAD") ? "font-medium text-neutral-900" : "text-neutral-700"
+                      isUnread(m) ? "font-medium text-neutral-900" : "text-neutral-700"
                     }`}
                   >
                     {m.subject}

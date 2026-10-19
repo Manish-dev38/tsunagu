@@ -1,8 +1,9 @@
 import { and, eq } from "drizzle-orm";
+import type { Connector } from "@/server/adapters/corsair";
 import type { Db } from "@/server/db";
 import { syncState } from "@/server/db/schema";
 
-export async function getLastSync(db: Db, tenantId: string, provider: string): Promise<string | null> {
+export async function getLastSync(db: Db, tenantId: string, provider: Connector): Promise<string | null> {
   const [row] = await db
     .select({ syncedAt: syncState.syncedAt })
     .from(syncState)
@@ -11,7 +12,7 @@ export async function getLastSync(db: Db, tenantId: string, provider: string): P
   return row ? row.syncedAt.toISOString() : null;
 }
 
-export async function recordSync(db: Db, tenantId: string, provider: string, syncedAt: Date): Promise<void> {
+export async function recordSync(db: Db, tenantId: string, provider: Connector, syncedAt: Date): Promise<void> {
   await db
     .insert(syncState)
     .values({ tenantId, provider, syncedAt })

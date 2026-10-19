@@ -1,10 +1,10 @@
-import type { CorsairPort } from "@/server/adapters/corsair";
+import type { Connector, CorsairPort } from "@/server/adapters/corsair";
 import type { Db } from "@/server/db";
 import { syncState } from "@/server/db/schema";
 import { recordSync } from "./state";
 
 export interface SyncProvider {
-  name: string;
+  name: Connector;
   sync(tenantId: string): Promise<{ syncedAt: string }>;
 }
 
@@ -53,8 +53,9 @@ export class Poller {
 
 let running: Poller | undefined;
 
+// Interval polling assumes one long-lived Node process (next start), not serverless
+// cold starts; Calendar (#7) adds another provider entry — the shape is the contract
 export function ensurePolling(db: Db, corsair: CorsairPort): void {
-  // Calendar (#7) adds another provider entry here; the shape is the contract
   running ??= new Poller(db, [{ name: "gmail", sync: (tenantId) => corsair.syncGmail(tenantId) }]);
   running.start();
 }

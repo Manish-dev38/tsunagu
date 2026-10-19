@@ -167,7 +167,7 @@ describe("router seam: inbox", () => {
     const calls: string[] = [];
     const poller = new Poller(db, [
       {
-        name: "calendar",
+        name: "googlecalendar",
         sync: async (tenantId) => {
           calls.push(tenantId);
           return { syncedAt: "2026-02-01T00:00:00.000Z" };
@@ -177,7 +177,7 @@ describe("router seam: inbox", () => {
 
     await poller.pollTenant("tenant_poll");
     expect(calls).toEqual(["tenant_poll"]);
-    await expect(getLastSync(db, "tenant_poll", "calendar")).resolves.toBe(
+    await expect(getLastSync(db, "tenant_poll", "googlecalendar")).resolves.toBe(
       "2026-02-01T00:00:00.000Z",
     );
   });
@@ -186,7 +186,7 @@ describe("router seam: inbox", () => {
     let tick = 0;
     const poller = new Poller(db, [
       {
-        name: "freshness",
+        name: "googlecalendar",
         sync: async () => {
           tick += 1;
           return { syncedAt: new Date(Date.UTC(2026, 1, tick)).toISOString() };
@@ -195,9 +195,9 @@ describe("router seam: inbox", () => {
     ]);
 
     await poller.pollTenant("tenant_fresh");
-    const first = await getLastSync(db, "tenant_fresh", "freshness");
+    const first = await getLastSync(db, "tenant_fresh", "googlecalendar");
     await poller.pollTenant("tenant_fresh");
-    const second = await getLastSync(db, "tenant_fresh", "freshness");
+    const second = await getLastSync(db, "tenant_fresh", "googlecalendar");
 
     expect(first).not.toBeNull();
     expect(second).not.toBe(first);

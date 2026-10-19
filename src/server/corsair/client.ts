@@ -2,13 +2,15 @@ import { createCorsair } from "corsair";
 import { gmail } from "@corsair-dev/gmail";
 import { googlecalendar } from "@corsair-dev/googlecalendar";
 import { Pool } from "pg";
-import type {
-  CachedMessage,
-  ConnectionStatus,
-  Connector,
-  CorsairPort,
-  ListMessagesOptions,
-  SyncResult,
+import {
+  applyListOptions,
+  isUnread,
+  type CachedMessage,
+  type ConnectionStatus,
+  type Connector,
+  type CorsairPort,
+  type ListMessagesOptions,
+  type SyncResult,
 } from "@/server/adapters/corsair";
 
 let pool: Pool | undefined;
@@ -62,8 +64,9 @@ export class RealCorsair implements CorsairPort {
 
   async syncGmail(tenantId: string): Promise<SyncResult> {
     const client = getClient().withTenant(tenantId);
-    // live list/get write-through into the corsair cache; cap pages at 500 for v1.
+    // live list/get write-through into the corsair cache.
     // casts: corsair's generic client types collapse to any through the plugin chain
+    // shortcut: caps at 5 pages x 100 and 1000 cached rows, upgrade when a real mailbox exceeds it
     const liveIds: string[] = [];
     let pageToken: string | undefined;
     for (let page = 0; page < 5; page++) {
@@ -94,28 +97,20 @@ export class RealCorsair implements CorsairPort {
   }
 
   async listCachedMessages(tenantId: string, opts: ListMessagesOptions = {}): Promise<CachedMessage[]> {
-    const { filter = "all", query, limit = 50, offset = 0 } = opts;
-    // scan cap: entity client has no server-side sort; upgrade when a mailbox outgrows it
+    // shortcut: scans at most 500 cached rows and sorts in-process (entity client has no
+    // server-side sort), upgrade to a DB-side sorted query when a mailbox outgrows it
     const rows = (await getClient()
       .withTenant(tenantId)
       .gmail.db.messages.list({ limit: 500 })) as MessageEntityRow[];
-    let messages = rows.map(toCachedMessage);
-    if (filter === "unread") messages = messages.filter((m) => m.labelIds.includes("UNREAD"));
-    if (query) {
-      const q = query.toLowerCase();
-      messages = messages.filter((m) =>
-        [m.subject, m.from, m.snippet, m.body].some((field) => field.toLowerCase().includes(q)),
-      );
-    }
-    messages.sort((a, b) => b.internalDate.localeCompare(a.internalDate));
-    return messages.slice(offset, offset + limit);
+    return applyListOptions(rows.map(toCachedMessage), opts);
   }
 
   async cachedUnreadCount(tenantId: string): Promise<number> {
+    // shortcut: scans at most 1000 cached rows, upgrade with an indexed count when needed
     const rows = (await getClient()
       .withTenant(tenantId)
       .gmail.db.messages.list({ limit: 1000 })) as MessageEntityRow[];
-    return rows.filter((row) => (row.data.labelIds ?? []).includes("UNREAD")).length;
+    return rows.filter((row) => isUnread(toCachedMessage(row))).length;
   }
 
   async getCachedMessage(tenantId: string, messageId: string): Promise<CachedMessage | null> {
