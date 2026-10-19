@@ -6,15 +6,46 @@ export type ConnectionState = "connected" | "missing_credentials" | "not_connect
 
 export type ConnectionStatus = Partial<Record<Connector, ConnectionState>>;
 
+export interface CachedMessage {
+  id: string;
+  threadId: string;
+  labelIds: string[];
+  snippet: string;
+  subject: string;
+  from: string;
+  to: string;
+  body: string;
+  internalDate: string;
+}
+
+export interface ListMessagesOptions {
+  filter?: "all" | "unread";
+  query?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SyncResult {
+  syncedAt: string;
+  synced: number;
+  deleted: number;
+}
+
 export interface CorsairPort {
   connectionStatus(tenantId: string): Promise<ConnectionStatus>;
   createConnectLink(tenantId: string, connector: Connector): Promise<{ connectUrl: string }>;
   disconnect(tenantId: string, connector: Connector): Promise<{ disconnected: boolean }>;
+  listCachedMessages(tenantId: string, opts?: ListMessagesOptions): Promise<CachedMessage[]>;
+  cachedUnreadCount(tenantId: string): Promise<number>;
+  getCachedMessage(tenantId: string, messageId: string): Promise<CachedMessage | null>;
+  syncGmail(tenantId: string): Promise<SyncResult>;
 }
 
 export class CorsairFake implements CorsairPort {
   private connected = new Map<string, Set<Connector>>();
   private pending = new Set<string>();
+  private liveMailbox = new Map<string, CachedMessage[]>();
+  private cache = new Map<string, Map<string, CachedMessage>>();
 
   async connectionStatus(tenantId: string): Promise<ConnectionStatus> {
     const set = this.connected.get(tenantId);
@@ -32,6 +63,50 @@ export class CorsairFake implements CorsairPort {
     this.pending.delete(`${tenantId}:${connector}`);
     const disconnected = this.connected.get(tenantId)?.delete(connector) ?? false;
     return { disconnected };
+  }
+
+  async listCachedMessages(tenantId: string, opts: ListMessagesOptions = {}): Promise<CachedMessage[]> {
+    const { filter = "all", query, limit = 50, offset = 0 } = opts;
+    let messages = [...(this.cache.get(tenantId)?.values() ?? [])];
+    if (filter === "unread") messages = messages.filter((m) => m.labelIds.includes("UNREAD"));
+    if (query) {
+      const q = query.toLowerCase();
+      messages = messages.filter((m) =>
+        [m.subject, m.from, m.snippet, m.body].some((field) => field.toLowerCase().includes(q)),
+      );
+    }
+    messages.sort((a, b) => b.internalDate.localeCompare(a.internalDate));
+    return messages.slice(offset, offset + limit);
+  }
+
+  async cachedUnreadCount(tenantId: string): Promise<number> {
+    return [...(this.cache.get(tenantId)?.values() ?? [])].filter((m) =>
+      m.labelIds.includes("UNREAD"),
+    ).length;
+  }
+
+  async getCachedMessage(tenantId: string, messageId: string): Promise<CachedMessage | null> {
+    return this.cache.get(tenantId)?.get(messageId) ?? null;
+  }
+
+  seedLiveMailbox(tenantId: string, messages: CachedMessage[]): void {
+    this.liveMailbox.set(tenantId, messages);
+  }
+
+  async syncGmail(tenantId: string): Promise<SyncResult> {
+    const live = this.liveMailbox.get(tenantId) ?? [];
+    const cache = this.cache.get(tenantId) ?? new Map<string, CachedMessage>();
+    const liveIds = new Set(live.map((m) => m.id));
+    let deleted = 0;
+    for (const id of [...cache.keys()]) {
+      if (!liveIds.has(id)) {
+        cache.delete(id);
+        deleted++;
+      }
+    }
+    for (const m of live) cache.set(m.id, { ...m });
+    this.cache.set(tenantId, cache);
+    return { syncedAt: new Date().toISOString(), synced: live.length, deleted };
   }
 
   simulateHubApproval(tenantId: string, connector: Connector): boolean {

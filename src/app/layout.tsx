@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { InboxBadge } from "./inbox-badge";
 import { TRPCProvider } from "@/trpc/provider";
 import "./globals.css";
 
@@ -8,10 +9,10 @@ export const metadata: Metadata = {
   description: "AI-native Gmail and Calendar",
 };
 
-const NAV: { label: string; href?: string }[] = [
+const NAV: { label: string; href?: string; badge?: boolean }[] = [
   { label: "Chat" },
   { label: "Action" },
-  { label: "Inbox" },
+  { label: "Inbox", href: "/inbox", badge: true },
   { label: "Memory" },
   { label: "Calendar" },
   { label: "Routine" },
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                       {item.href ? (
                         <Link className="block rounded px-2 py-1 hover:bg-neutral-100" href={item.href}>
                           {item.label}
+                          {item.badge && <InboxBadge />}
                         </Link>
                       ) : (
                         <span className="block px-2 py-1">{item.label}</span>
