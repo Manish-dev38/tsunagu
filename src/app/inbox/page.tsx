@@ -27,6 +27,12 @@ export default function InboxPage() {
     onError: (e) => setRefreshError(e.message),
   });
 
+  // The SDK's auth-missing error embeds a connect link that expires in minutes; mint a fresh one on click.
+  const connect = api.connectors.connectUrl.useMutation({
+    onSuccess: ({ url }) => window.location.assign(url),
+    onError: (e) => setRefreshError(e.message),
+  });
+
   if (list.isPending) return <p className="text-sm text-neutral-500">Loading…</p>;
 
   if (list.error) {
@@ -76,7 +82,21 @@ export default function InboxPage() {
           </div>
         </div>
 
-        {refreshError && <p className="mb-2 text-sm text-red-600">{refreshError}</p>}
+        {refreshError &&
+          (refreshError.includes("[auth-missing:") ? (
+            <p className="mb-2 text-sm text-amber-700">
+              Gmail isn&apos;t connected yet.{" "}
+              <button
+                className="underline disabled:opacity-50"
+                disabled={connect.isPending}
+                onClick={() => connect.mutate({ connector: "gmail" })}
+              >
+                {connect.isPending ? "Opening…" : "Connect Gmail"}
+              </button>
+            </p>
+          ) : (
+            <p className="mb-2 text-sm text-red-600">{refreshError}</p>
+          ))}
 
         <p className="mb-2 text-xs text-neutral-400">
           {list.data.unreadCount} unread · last synced{" "}

@@ -16,7 +16,7 @@ import {
 let pool: Pool | undefined;
 let client: ReturnType<typeof createCorsair> | undefined;
 
-function getClient() {
+export function getClient() {
   if (!client) {
     const kek = process.env.CORSAIR_KEK;
     const databaseUrl = process.env.DATABASE_URL;
@@ -64,24 +64,16 @@ export class RealCorsair implements CorsairPort {
 
   async syncGmail(tenantId: string): Promise<SyncResult> {
     const client = getClient().withTenant(tenantId);
-    // live list/get write-through into the corsair cache.
-    // casts: corsair's generic client types collapse to any through the plugin chain
-    // shortcut: caps at 5 pages x 100 and 1000 cached rows, upgrade when a real mailbox exceeds it
-    const liveIds: string[] = [];
-    let pageToken: string | undefined;
-    for (let page = 0; page < 5; page++) {
-      const res = (await client.gmail.api.messages.list({ maxResults: 100, pageToken })) as {
-        messages?: { id?: string }[];
-        nextPageToken?: string;
-      };
-      for (const m of res.messages ?? []) {
-        if (!m.id) continue;
-        liveIds.push(m.id);
-        // full fetch extracts subject/body/from/to; skip messages that vanish mid-sync
-        await client.gmail.api.messages.get({ id: m.id, format: "full" }).catch(() => undefined);
-      }
-      pageToken = res.nextPageToken;
-      if (!pageToken) break;
+    // keep the poll light: latest 10 only (Gmail list is newest-first);
+    // raise maxResults when search/history needs a deeper cache
+    // cast: corsair's generic client types collapse to any through the plugin chain
+    const res = (await client.gmail.api.messages.list({ maxResults: 10 })) as {
+      messages?: { id?: string }[];
+    };
+    const liveIds = (res.messages ?? []).flatMap((m) => (m.id ? [m.id] : []));
+    for (const id of liveIds) {
+      // full fetch extracts subject/body/from/to; skip messages that vanish mid-sync
+      await client.gmail.api.messages.get({ id, format: "full" }).catch(() => undefined);
     }
     // deletions: cache rows the live mailbox no longer returns
     const liveSet = new Set(liveIds);

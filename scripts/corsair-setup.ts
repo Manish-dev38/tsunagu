@@ -64,6 +64,7 @@ const client = createCorsair({
   hub: {
     projectApiKey: required("CORSAIR_HUB_PROJECT_API_KEY"),
     signingSecret: required("CORSAIR_HUB_SIGNING_SECRET"),
+    tunnel: false,
   },
 });
 
