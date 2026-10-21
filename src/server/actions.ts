@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
 import type { MailboxWrites } from "@/server/adapters/corsair";
 import type { Db } from "@/server/db";
 import { actions } from "@/server/db/schema";
@@ -11,18 +12,47 @@ export type MailWrite =
   | { kind: "mail.mark_read"; messageId: string }
   | { kind: "mail.mark_unread"; messageId: string };
 
+export interface EmailSendPayload {
+  to: string;
+  subject: string;
+  body: string;
+}
+
 export interface WrittenAction {
   id: string;
   kind: MailWrite["kind"];
   status: "executed" | "failed";
 }
 
-// Human-initiated writes run ungated (ADR-0001) and always land in the Action log.
+// Agent writes never touch the provider here: they land as pending proposals
+// until the user approves the card (ADR-0001).
+export async function createProposal(
+  db: Db,
+  tenantId: string,
+  payload: EmailSendPayload,
+): Promise<{ id: string; status: "pending" }> {
+  const id = randomUUID();
+  await db.insert(actions).values({
+    id,
+    tenantId,
+    kind: "email.send",
+    initiator: "agent",
+    status: "pending",
+    payload: { ...payload },
+  });
+  return { id, status: "pending" };
+}
+
+// Human writes run ungated (the user is the approval); agent writes only
+// arrive here after the approval card, updating the proposal row (ADR-0001).
 export async function performWrite(
   db: Db,
   corsair: MailboxWrites,
   tenantId: string,
   write: MailWrite,
+  // actionId set = follow-up on an existing proposal row (agent path); the
+  // row is already initiator=agent and status=approved from the claim step.
+  opts?: { actionId: string },
 ): Promise<WrittenAction> {
   let error: unknown;
   try {
@@ -53,9 +83,16 @@ export async function performWrite(
   } catch (e) {
     error = e;
   }
-  const id = randomUUID();
+  const id = opts?.actionId ?? randomUUID();
   const status = error ? "failed" : "executed";
-  await db.insert(actions).values({ id, tenantId, kind: write.kind, initiator: "human", status });
+  if (opts?.actionId) {
+    await db
+      .update(actions)
+      .set({ status })
+      .where(and(eq(actions.id, id), eq(actions.tenantId, tenantId)));
+  } else {
+    await db.insert(actions).values({ id, tenantId, kind: write.kind, initiator: "human", status });
+  }
   if (error) throw error;
   return { id, kind: write.kind, status };
 }

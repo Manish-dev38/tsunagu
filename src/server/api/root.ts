@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { runChatTurn } from "@/server/agent";
 import { performWrite } from "@/server/actions";
 import { CONNECTORS } from "@/server/adapters/corsair";
-import { sessionMessages, sessions } from "@/server/db/schema";
+import { actions, sessionMessages, sessions } from "@/server/db/schema";
 import { getLastSync, recordSync } from "@/server/sync/state";
 import { protectedProcedure, router, type Context } from "./trpc";
 
 const connectorSchema = z.enum(CONNECTORS);
+
+// One draft shape for every email send: human compose, agent proposal,
+// and approval-card edits.
+const emailDraftSchema = z.object({ to: z.string().min(1), subject: z.string(), body: z.string() });
 
 const connectorsRouter = router({
   list: protectedProcedure.query(({ ctx }) => ctx.corsair.connectionStatus(ctx.tenantId)),
@@ -59,13 +63,11 @@ const inboxRouter = router({
   }),
 
   send: protectedProcedure
-    .input(z.object({ to: z.string().min(1), subject: z.string(), body: z.string() }))
+    .input(emailDraftSchema)
     .mutation(({ ctx, input }) =>
       performWrite(ctx.db, ctx.corsair, ctx.tenantId, {
         kind: "email.send",
-        to: input.to,
-        subject: input.subject,
-        body: input.body,
+        ...input,
       }),
     ),
 
@@ -147,7 +149,100 @@ const chatRouter = router({
       });
       await ctx.db.update(sessions).set({ updatedAt: new Date() }).where(eq(sessions.id, sessionId));
     }),
+
+  // Approval cards (ADR-0001): the agent's proposals sit here inert until
+  // approved, edited then approved, or discarded.
+  proposals: protectedProcedure.query(({ ctx }) =>
+    ctx.db
+      .select()
+      .from(actions)
+      .where(
+        and(
+          eq(actions.tenantId, ctx.tenantId),
+          eq(actions.kind, "email.send"),
+          eq(actions.initiator, "agent"),
+          inArray(actions.status, ["pending", "edited"]),
+        ),
+      )
+      .orderBy(desc(actions.createdAt)),
+  ),
+
+  approve: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const proposal = await loadProposal(ctx.db, input.id, ctx.tenantId);
+      // the status guard is the claim: only one concurrent approve/discard/edit
+      // can move pending|edited -> approved, so the send happens exactly once
+      const claimed = await ctx.db
+        .update(actions)
+        .set({ status: "approved" })
+        .where(
+          and(
+            eq(actions.id, proposal.id),
+            eq(actions.tenantId, ctx.tenantId),
+            inArray(actions.status, ["pending", "edited"]),
+          ),
+        )
+        .returning({ id: actions.id });
+      if (claimed.length === 0) throw new TRPCError({ code: "CONFLICT" });
+      const parsed = emailDraftSchema.safeParse(proposal.payload);
+      if (!parsed.success) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "proposal payload is not a valid email draft" });
+      }
+      return performWrite(
+        ctx.db,
+        ctx.corsair,
+        ctx.tenantId,
+        { kind: "email.send", ...parsed.data },
+        { actionId: proposal.id },
+      );
+    }),
+
+  editProposal: protectedProcedure
+    .input(z.object({ id: z.string() }).extend(emailDraftSchema.shape))
+    .mutation(async ({ ctx, input }) => {
+      const proposal = await loadProposal(ctx.db, input.id, ctx.tenantId);
+      await ctx.db
+        .update(actions)
+        .set({
+          status: "edited",
+          payload: { to: input.to, subject: input.subject, body: input.body },
+        })
+        .where(eq(actions.id, proposal.id));
+      return { id: proposal.id, status: "edited" as const };
+    }),
+
+  discardProposal: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const proposal = await loadProposal(ctx.db, input.id, ctx.tenantId);
+      await ctx.db
+        .update(actions)
+        .set({ status: "discarded" })
+        .where(eq(actions.id, proposal.id));
+      return { id: proposal.id, status: "discarded" as const };
+    }),
 });
+
+async function loadProposal(db: Context["db"], id: string, tenantId: string) {
+  const [proposal] = await db
+    .select()
+    .from(actions)
+    .where(
+      and(
+        eq(actions.id, id),
+        eq(actions.tenantId, tenantId),
+        eq(actions.initiator, "agent"),
+        eq(actions.kind, "email.send"),
+      ),
+    )
+    .limit(1);
+  if (!proposal) throw new TRPCError({ code: "NOT_FOUND" });
+  if (proposal.status !== "pending" && proposal.status !== "edited") {
+    throw new TRPCError({ code: "CONFLICT" });
+  }
+  return proposal;
+}
 
 async function assertSession(db: Context["db"], sessionId: string, tenantId: string) {
   const [session] = await db

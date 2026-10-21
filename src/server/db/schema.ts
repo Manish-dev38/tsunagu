@@ -1,4 +1,4 @@
-import { pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
@@ -18,13 +18,15 @@ export const syncState = pgTable(
   (table) => [primaryKey({ columns: [table.tenantId, table.provider] })],
 );
 
-// The Action log: every mailbox write (human now, agent later) is one row.
+// The Action log: every mailbox write (human ungated, agent gated via
+// proposal) is one row. payload holds the email draft until the card resolves.
 export const actions = pgTable("actions", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull(),
   kind: text("kind").notNull(),
   initiator: text("initiator").notNull(),
   status: text("status").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

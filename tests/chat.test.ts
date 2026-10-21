@@ -143,15 +143,16 @@ describe("router seam: chat sessions, streaming, agent reads", () => {
     expect(JSON.stringify(llm.requests[1].messages)).toContain("Your receipt");
   });
 
-  it("offers the model only read-only tools; no write tool ever appears", async () => {
+  it("offers only cache reads plus the gated send-proposal tool", async () => {
     const llm = new LlmFake().script({ text: "Sure" });
     const caller = makeCaller("tenant_ro", db, new CorsairFake(), llm);
 
     await askAll(caller, { sessionId: null, content: "hello" });
 
     expect(llm.requests).toHaveLength(1);
-    expect(llm.requests[0].tools).toEqual(["list_emails", "read_email"]);
+    expect(llm.requests[0].tools).toEqual(["list_emails", "read_email", "propose_send_email"]);
     for (const request of llm.requests) {
+      // no direct provider writes exist for the model; propose is gated (ADR-0001)
       expect(request.tools).not.toContain("send_email");
       expect(request.tools).not.toContain("archive");
     }

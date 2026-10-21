@@ -2,15 +2,16 @@ import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
 import { isUnread, type CorsairPort } from "@/server/adapters/corsair";
 import type { LlmMessage, LlmPort, ToolSpec } from "@/server/adapters/llm";
+import { createProposal } from "@/server/actions";
 import type { Db } from "@/server/db";
 import { sessionMessages } from "@/server/db/schema";
 
 // shortcut: fixed iteration cap; raise when a real workflow needs more tool hops
 const MAX_ITERATIONS = 8;
 
-// Read-only by design: no send/modify/delete tool exists for the agent (ADR-0001;
-// agent writes arrive gated in a later ticket).
-export const READ_TOOLS: ToolSpec[] = [
+// propose_send_email only creates a pending approval proposal - never a
+// provider write; the mail leaves exclusively via the approval card (ADR-0001).
+export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: "list_emails",
     description:
@@ -38,12 +39,28 @@ export const READ_TOOLS: ToolSpec[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "propose_send_email",
+    description:
+      "Propose sending an email (to/subject/body). Creates a pending proposal the user reviews in Chat with Approve, Edit and Discard; nothing is sent until they approve.",
+    parameters: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient address" },
+        subject: { type: "string" },
+        body: { type: "string" },
+      },
+      required: ["to", "subject", "body"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const SYSTEM_PROMPT = [
   "You are the Tsunagu assistant, a concise email aide.",
   "You can list/search the inbox and read single emails in full, all from a local cache.",
-  "You cannot send, modify, delete, archive or label anything, and you have no calendar access yet - never claim otherwise.",
+  "When the user asks to send an email, draft it and call propose_send_email, then tell them it is waiting for approval in Chat; never claim it was sent.",
+  "You cannot modify, delete, archive or label anything, and you have no calendar access yet - never claim otherwise.",
   "For 'summarize this email' read it first; for 'summarize my inbox' list first, then answer in a short digest.",
 ].join(" ");
 
@@ -83,7 +100,7 @@ export async function* runChatTurn(opts: {
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
     let text = "";
     const toolCalls: { id: string; name: string; arguments: string }[] = [];
-    for await (const event of llm.streamChat({ messages, tools: READ_TOOLS })) {
+    for await (const event of llm.streamChat({ messages, tools: AGENT_TOOLS })) {
       if (event.type === "text_delta") {
         text += event.text;
         seen += event.text;
@@ -98,7 +115,7 @@ export async function* runChatTurn(opts: {
       messages.push({
         role: "tool",
         toolCallId: call.id,
-        content: await executeReadTool(corsair, tenantId, call.name, call.arguments),
+        content: await executeTool(db, corsair, tenantId, call.name, call.arguments),
       });
     }
   }
@@ -113,7 +130,8 @@ export async function* runChatTurn(opts: {
   yield { type: "done", reply };
 }
 
-async function executeReadTool(
+async function executeTool(
+  db: Db,
   corsair: CorsairPort,
   tenantId: string,
   name: string,
@@ -147,6 +165,26 @@ async function executeReadTool(
       const id = typeof args.id === "string" ? args.id : "";
       const message = id ? await corsair.getCachedMessage(tenantId, id) : null;
       return JSON.stringify(message ?? { error: `no email with id ${id}` });
+    }
+    if (name === "propose_send_email") {
+      if (
+        typeof args.to !== "string" ||
+        !args.to.trim() ||
+        typeof args.subject !== "string" ||
+        typeof args.body !== "string"
+      ) {
+        return JSON.stringify({ error: "to, subject and body are required" });
+      }
+      const proposal = await createProposal(db, tenantId, {
+        to: args.to,
+        subject: args.subject,
+        body: args.body,
+      });
+      return JSON.stringify({
+        status: "pending_approval",
+        proposalId: proposal.id,
+        message: "Draft created. Nothing was sent; the user must approve it in Chat.",
+      });
     }
     return JSON.stringify({ error: `unknown tool ${name}` });
   } catch (e) {

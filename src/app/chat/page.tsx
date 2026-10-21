@@ -3,6 +3,7 @@
 import { skipToken } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api } from "@/trpc/provider";
+import { ProposalCard } from "./proposal-card";
 
 type AskInput = { sessionId: string | null; content: string };
 type AskEvent =
@@ -36,6 +37,31 @@ export default function ChatPage() {
   const messages = api.chat.messages.useQuery(
     activeId ? { sessionId: activeId } : skipToken,
   );
+  const proposals = api.chat.proposals.useQuery();
+
+  const approve = api.chat.approve.useMutation({
+    onSuccess: () => {
+      setError(null);
+      void utils.chat.proposals.invalidate();
+      // the mail actually left; refresh the inbox cache view too
+      void utils.inbox.list.invalidate();
+    },
+    onError: (e) => setError(e.message),
+  });
+  const editProposal = api.chat.editProposal.useMutation({
+    onSuccess: () => {
+      setError(null);
+      void utils.chat.proposals.invalidate();
+    },
+    onError: (e) => setError(e.message),
+  });
+  const discardProposal = api.chat.discardProposal.useMutation({
+    onSuccess: () => {
+      setError(null);
+      void utils.chat.proposals.invalidate();
+    },
+    onError: (e) => setError(e.message),
+  });
 
   const finishTurn = () => {
     setAskInput(null);
@@ -43,6 +69,8 @@ export default function ChatPage() {
     setStreamText("");
     void utils.chat.messages.invalidate();
     void utils.chat.sessions.invalidate();
+    // the turn may have just created a draft proposal
+    void utils.chat.proposals.invalidate();
   };
 
   const send = (event: FormEvent) => {
@@ -126,6 +154,23 @@ export default function ChatPage() {
             </div>
           )}
         </div>
+        {proposals.data && proposals.data.length > 0 && (
+          <div className="mt-4 space-y-3">
+            <h2 className="text-sm font-semibold text-neutral-500">Awaiting your approval</h2>
+            {proposals.data.map((proposal) => (
+              <ProposalCard
+                key={proposal.id}
+                proposal={proposal}
+                onApprove={() => approve.mutate({ id: proposal.id })}
+                onEdit={(draft) => editProposal.mutate({ id: proposal.id, ...draft })}
+                onDiscard={() => discardProposal.mutate({ id: proposal.id })}
+                busy={
+                  approve.isPending || editProposal.isPending || discardProposal.isPending
+                }
+              />
+            ))}
+          </div>
+        )}
         <form onSubmit={send} className="mt-3 flex gap-2">
           <input
             value={input}
