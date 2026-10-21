@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto";
+import { TRPCError } from "@trpc/server";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
+import { runChatTurn } from "@/server/agent";
 import { performWrite } from "@/server/actions";
 import { CONNECTORS } from "@/server/adapters/corsair";
+import { sessionMessages, sessions } from "@/server/db/schema";
 import { getLastSync, recordSync } from "@/server/sync/state";
-import { protectedProcedure, router } from "./trpc";
+import { protectedProcedure, router, type Context } from "./trpc";
 
 const connectorSchema = z.enum(CONNECTORS);
 
@@ -92,6 +97,67 @@ const inboxRouter = router({
     ),
 });
 
+const chatRouter = router({
+  sessions: protectedProcedure.query(({ ctx }) =>
+    ctx.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.tenantId, ctx.tenantId))
+      .orderBy(desc(sessions.updatedAt)),
+  ),
+
+  messages: protectedProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      await assertSession(ctx.db, input.sessionId, ctx.tenantId);
+      return ctx.db
+        .select()
+        .from(sessionMessages)
+        .where(eq(sessionMessages.sessionId, input.sessionId))
+        .orderBy(asc(sessionMessages.createdAt));
+    }),
+
+  ask: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().nullable(),
+        content: z.string().min(1).max(4000),
+      }),
+    )
+    .subscription(async function* ({ ctx, input }) {
+      let sessionId = input.sessionId;
+      if (sessionId) {
+        await assertSession(ctx.db, sessionId, ctx.tenantId);
+      } else {
+        sessionId = randomUUID();
+        await ctx.db.insert(sessions).values({
+          id: sessionId,
+          tenantId: ctx.tenantId,
+          title: input.content.slice(0, 60),
+        });
+      }
+      yield { type: "session" as const, sessionId };
+      yield* runChatTurn({
+        db: ctx.db,
+        corsair: ctx.corsair,
+        llm: ctx.llm,
+        tenantId: ctx.tenantId,
+        sessionId,
+        userText: input.content,
+      });
+      await ctx.db.update(sessions).set({ updatedAt: new Date() }).where(eq(sessions.id, sessionId));
+    }),
+});
+
+async function assertSession(db: Context["db"], sessionId: string, tenantId: string) {
+  const [session] = await db
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(and(eq(sessions.id, sessionId), eq(sessions.tenantId, tenantId)))
+    .limit(1);
+  if (!session) throw new TRPCError({ code: "NOT_FOUND" });
+}
+
 export const appRouter = router({
   me: protectedProcedure.query(({ ctx }) => ({
     tenantId: ctx.tenantId,
@@ -99,6 +165,7 @@ export const appRouter = router({
   })),
   connectors: connectorsRouter,
   inbox: inboxRouter,
+  chat: chatRouter,
 });
 
 export type AppRouter = typeof appRouter;

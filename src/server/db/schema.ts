@@ -27,3 +27,22 @@ export const actions = pgTable("actions", {
   status: text("status").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// A Session: a persisted conversation in Chat, listed and resumable.
+export const sessions = pgTable("sessions", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull(),
+  title: text("title").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const sessionMessages = pgTable("session_messages", {
+  id: text("id").primaryKey(),
+  sessionId: text("session_id")
+    .notNull()
+    .references(() => sessions.id, { onDelete: "cascade" }),
+  role: text("role").notNull(), // "user" | "assistant"
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});

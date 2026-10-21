@@ -22,6 +22,13 @@
       "when": 1792555391818,
       "tag": "0002_fast_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792565168427,
+      "tag": "0003_tearful_magdalene",
+      "breakpoints": true
     }
   ]
 }
