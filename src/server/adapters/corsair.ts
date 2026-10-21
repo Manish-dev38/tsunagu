@@ -49,7 +49,20 @@ export function applyListOptions(messages: CachedMessage[], opts: ListMessagesOp
   return result.slice(offset, offset + limit);
 }
 
-export interface CorsairPort {
+export interface SendEmailInput {
+  to: string;
+  subject: string;
+  body: string;
+}
+
+export interface MailboxWrites {
+  sendEmail(tenantId: string, input: SendEmailInput): Promise<void>;
+  archiveMessage(tenantId: string, messageId: string): Promise<void>;
+  setStarred(tenantId: string, messageId: string, starred: boolean): Promise<void>;
+  setRead(tenantId: string, messageId: string, read: boolean): Promise<void>;
+}
+
+export interface CorsairPort extends MailboxWrites {
   connectionStatus(tenantId: string): Promise<ConnectionStatus>;
   createConnectLink(tenantId: string, connector: Connector): Promise<{ connectUrl: string }>;
   disconnect(tenantId: string, connector: Connector): Promise<{ disconnected: boolean }>;
@@ -64,6 +77,8 @@ export class CorsairFake implements CorsairPort {
   private pending = new Set<string>();
   private liveMailbox = new Map<string, CachedMessage[]>();
   private cache = new Map<string, Map<string, CachedMessage>>();
+  sent: Array<SendEmailInput & { tenantId: string }> = [];
+  failWrite: Error | null = null;
 
   async connectionStatus(tenantId: string): Promise<ConnectionStatus> {
     const set = this.connected.get(tenantId);
@@ -83,6 +98,42 @@ export class CorsairFake implements CorsairPort {
     return { disconnected };
   }
 
+  async sendEmail(tenantId: string, input: SendEmailInput) {
+    if (this.failWrite) throw this.failWrite;
+    this.sent.push({ tenantId, ...input });
+  }
+
+  async archiveMessage(tenantId: string, messageId: string) {
+    if (this.failWrite) throw this.failWrite;
+    this.setLabel(tenantId, messageId, "INBOX", false);
+    // drop from cache so the list reflects the archive before the next poll
+    this.cache.get(tenantId)?.delete(messageId);
+  }
+
+  async setStarred(tenantId: string, messageId: string, starred: boolean) {
+    if (this.failWrite) throw this.failWrite;
+    this.setLabel(tenantId, messageId, "STARRED", starred);
+  }
+
+  async setRead(tenantId: string, messageId: string, read: boolean) {
+    if (this.failWrite) throw this.failWrite;
+    // Gmail models "read" as the absence of the UNREAD label
+    this.setLabel(tenantId, messageId, "UNREAD", !read);
+  }
+
+  // mutates cache and live mailbox alike so a later sync cannot resurrect stale labels
+  private setLabel(tenantId: string, messageId: string, label: string, present: boolean) {
+    const cached = this.cache.get(tenantId)?.get(messageId);
+    const live = (this.liveMailbox.get(tenantId) ?? []).find((m) => m.id === messageId);
+    for (const msg of [cached, live]) {
+      if (!msg) continue;
+      const labels = new Set(msg.labelIds);
+      if (present) labels.add(label);
+      else labels.delete(label);
+      msg.labelIds = [...labels];
+    }
+  }
+
   async listCachedMessages(tenantId: string, opts: ListMessagesOptions = {}): Promise<CachedMessage[]> {
     return applyListOptions([...(this.cache.get(tenantId)?.values() ?? [])], opts);
   }
@@ -100,7 +151,8 @@ export class CorsairFake implements CorsairPort {
   }
 
   async syncGmail(tenantId: string): Promise<SyncResult> {
-    const live = this.liveMailbox.get(tenantId) ?? [];
+    // mirrors the real adapter: the poll is INBOX-scoped, so archived mail leaves the cache
+    const live = (this.liveMailbox.get(tenantId) ?? []).filter((m) => m.labelIds.includes("INBOX"));
     const cache = this.cache.get(tenantId) ?? new Map<string, CachedMessage>();
     const liveIds = new Set(live.map((m) => m.id));
     let deleted = 0;

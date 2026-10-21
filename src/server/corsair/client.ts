@@ -10,6 +10,7 @@ import {
   type Connector,
   type CorsairPort,
   type ListMessagesOptions,
+  type SendEmailInput,
   type SyncResult,
 } from "@/server/adapters/corsair";
 
@@ -65,9 +66,13 @@ export class RealCorsair implements CorsairPort {
   async syncGmail(tenantId: string): Promise<SyncResult> {
     const client = getClient().withTenant(tenantId);
     // keep the poll light: latest 10 only (Gmail list is newest-first);
+    // INBOX-scoped so archived mail leaves the cache on the next sync;
     // raise maxResults when search/history needs a deeper cache
     // cast: corsair's generic client types collapse to any through the plugin chain
-    const res = (await client.gmail.api.messages.list({ maxResults: 10 })) as {
+    const res = (await client.gmail.api.messages.list({
+      maxResults: 10,
+      labelIds: ["INBOX"],
+    })) as {
       messages?: { id?: string }[];
     };
     const liveIds = (res.messages ?? []).flatMap((m) => (m.id ? [m.id] : []));
@@ -110,6 +115,41 @@ export class RealCorsair implements CorsairPort {
       .withTenant(tenantId)
       .gmail.db.messages.findByEntityId(messageId)) as MessageEntityRow | null;
     return row ? toCachedMessage(row) : null;
+  }
+
+  async sendEmail(tenantId: string, input: SendEmailInput) {
+    // shortcut: subject is raw UTF-8, no RFC2047 encoding; add it when non-ASCII subjects bounce
+    const raw = Buffer.from(
+      `To: ${input.to}\r\nSubject: ${input.subject}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${input.body}`,
+    ).toString("base64url");
+    await getClient().withTenant(tenantId).gmail.api.messages.send({ raw });
+  }
+
+  async archiveMessage(tenantId: string, messageId: string) {
+    const client = getClient().withTenant(tenantId);
+    await client.gmail.api.messages.modify({ id: messageId, removeLabelIds: ["INBOX"] });
+    // drop from cache so the list reflects the archive before the next poll
+    await client.gmail.db.messages.deleteByEntityId(messageId).catch(() => undefined);
+  }
+
+  async setStarred(tenantId: string, messageId: string, starred: boolean) {
+    await this.modifyLabel(tenantId, messageId, "STARRED", starred);
+  }
+
+  async setRead(tenantId: string, messageId: string, read: boolean) {
+    // Gmail models "read" as the absence of the UNREAD label
+    await this.modifyLabel(tenantId, messageId, "UNREAD", !read);
+  }
+
+  private async modifyLabel(tenantId: string, messageId: string, label: string, present: boolean) {
+    const client = getClient().withTenant(tenantId);
+    await client.gmail.api.messages.modify({
+      id: messageId,
+      addLabelIds: present ? [label] : undefined,
+      removeLabelIds: present ? undefined : [label],
+    });
+    // full get write-throughs the fresh labelIds into the cache
+    await client.gmail.api.messages.get({ id: messageId, format: "full" }).catch(() => undefined);
   }
 }
 

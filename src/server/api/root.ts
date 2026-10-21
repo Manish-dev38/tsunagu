@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { performWrite } from "@/server/actions";
 import { CONNECTORS } from "@/server/adapters/corsair";
 import { getLastSync, recordSync } from "@/server/sync/state";
 import { protectedProcedure, router } from "./trpc";
@@ -51,6 +52,44 @@ const inboxRouter = router({
     await recordSync(ctx.db, ctx.tenantId, "gmail", new Date(result.syncedAt));
     return result;
   }),
+
+  send: protectedProcedure
+    .input(z.object({ to: z.string().min(1), subject: z.string(), body: z.string() }))
+    .mutation(({ ctx, input }) =>
+      performWrite(ctx.db, ctx.corsair, ctx.tenantId, {
+        kind: "email.send",
+        to: input.to,
+        subject: input.subject,
+        body: input.body,
+      }),
+    ),
+
+  archive: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(({ ctx, input }) =>
+      performWrite(ctx.db, ctx.corsair, ctx.tenantId, {
+        kind: "mail.archive",
+        messageId: input.id,
+      }),
+    ),
+
+  setStarred: protectedProcedure
+    .input(z.object({ id: z.string(), starred: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      performWrite(ctx.db, ctx.corsair, ctx.tenantId, {
+        kind: input.starred ? "mail.star" : "mail.unstar",
+        messageId: input.id,
+      }),
+    ),
+
+  setRead: protectedProcedure
+    .input(z.object({ id: z.string(), read: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      performWrite(ctx.db, ctx.corsair, ctx.tenantId, {
+        kind: input.read ? "mail.mark_read" : "mail.mark_unread",
+        messageId: input.id,
+      }),
+    ),
 });
 
 export const appRouter = router({

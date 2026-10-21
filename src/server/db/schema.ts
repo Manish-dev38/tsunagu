@@ -17,3 +17,13 @@ export const syncState = pgTable(
   },
   (table) => [primaryKey({ columns: [table.tenantId, table.provider] })],
 );
+
+// The Action log: every mailbox write (human now, agent later) is one row.
+export const actions = pgTable("actions", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull(),
+  kind: text("kind").notNull(),
+  initiator: text("initiator").notNull(),
+  status: text("status").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});

@@ -15,6 +15,13 @@
       "when": 1792372730189,
       "tag": "0001_petite_ego",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792555391818,
+      "tag": "0002_fast_leader",
+      "breakpoints": true
     }
   ]
 }
