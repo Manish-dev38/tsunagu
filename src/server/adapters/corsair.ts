@@ -74,6 +74,20 @@ export interface CreateEventInput {
   summary: string;
   start: string; // ISO datetime
   end: string; // ISO datetime
+  attendees: string[];
+  notify: boolean; // email attendees about this change
+}
+
+export interface RescheduleEventInput {
+  eventId: string;
+  start: string;
+  end: string;
+  notify: boolean;
+}
+
+export interface CancelEventInput {
+  eventId: string;
+  notify: boolean;
 }
 
 // Half-open window [timeMin, timeMax) over ISO datetimes.
@@ -135,6 +149,8 @@ export interface MailboxWrites {
 
 export interface CalendarWrites {
   createEvent(tenantId: string, input: CreateEventInput): Promise<void>;
+  rescheduleEvent(tenantId: string, input: RescheduleEventInput): Promise<void>;
+  cancelEvent(tenantId: string, input: CancelEventInput): Promise<void>;
 }
 
 export interface CorsairPort extends MailboxWrites, CalendarWrites {
@@ -158,6 +174,8 @@ export class CorsairFake implements CorsairPort {
   private eventCache = new Map<string, Map<string, CachedEvent>>();
   sent: Array<SendEmailInput & { tenantId: string }> = [];
   createdEvents: Array<CreateEventInput & { tenantId: string }> = [];
+  rescheduled: Array<RescheduleEventInput & { tenantId: string }> = [];
+  canceled: Array<CancelEventInput & { tenantId: string }> = [];
   failWrite: Error | null = null;
 
   async connectionStatus(tenantId: string): Promise<ConnectionStatus> {
@@ -220,6 +238,35 @@ export class CorsairFake implements CorsairPort {
     const live = this.liveCalendar.get(tenantId) ?? [];
     live.push(event);
     this.liveCalendar.set(tenantId, live);
+  }
+
+  async rescheduleEvent(tenantId: string, input: RescheduleEventInput) {
+    if (this.failWrite) throw this.failWrite;
+    const cache = this.eventCache.get(tenantId);
+    const live = this.liveCalendar.get(tenantId);
+    const idx = live ? live.findIndex((e) => e.id === input.eventId) : -1;
+    const current = cache?.get(input.eventId) ?? (idx >= 0 ? live![idx] : undefined);
+    if (!current) throw new Error(`no event ${input.eventId}`);
+    const updated: CachedEvent = {
+      ...current,
+      start: { dateTime: input.start },
+      end: { dateTime: input.end },
+    };
+    cache?.set(input.eventId, updated);
+    if (idx >= 0) live![idx] = updated;
+    this.rescheduled.push({ tenantId, ...input });
+  }
+
+  async cancelEvent(tenantId: string, input: CancelEventInput) {
+    if (this.failWrite) throw this.failWrite;
+    const cache = this.eventCache.get(tenantId);
+    const live = this.liveCalendar.get(tenantId);
+    const idx = live ? live.findIndex((e) => e.id === input.eventId) : -1;
+    const known = (cache?.has(input.eventId) ?? false) || idx >= 0;
+    if (!known) throw new Error(`no event ${input.eventId}`);
+    cache?.delete(input.eventId);
+    if (idx >= 0) live!.splice(idx, 1);
+    this.canceled.push({ tenantId, ...input });
   }
 
   // mutates cache and live mailbox alike so a later sync cannot resurrect stale labels

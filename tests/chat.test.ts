@@ -143,18 +143,28 @@ describe("router seam: chat sessions, streaming, agent reads", () => {
     expect(JSON.stringify(llm.requests[1].messages)).toContain("Your receipt");
   });
 
-  it("offers only cache reads plus the gated send-proposal tool", async () => {
+  it("offers only cache reads plus the gated proposal tools", async () => {
     const llm = new LlmFake().script({ text: "Sure" });
     const caller = makeCaller("tenant_ro", db, new CorsairFake(), llm);
 
     await askAll(caller, { sessionId: null, content: "hello" });
 
     expect(llm.requests).toHaveLength(1);
-    expect(llm.requests[0].tools).toEqual(["list_emails", "read_email", "propose_send_email"]);
+    expect(llm.requests[0].tools).toEqual([
+      "list_emails",
+      "read_email",
+      "propose_send_email",
+      "list_events",
+      "propose_schedule_event",
+      "propose_reschedule_event",
+      "propose_cancel_event",
+    ]);
     for (const request of llm.requests) {
       // no direct provider writes exist for the model; propose is gated (ADR-0001)
       expect(request.tools).not.toContain("send_email");
       expect(request.tools).not.toContain("archive");
+      expect(request.tools).not.toContain("reschedule_event");
+      expect(request.tools).not.toContain("cancel_event");
     }
   });
 

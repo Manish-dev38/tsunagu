@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
-import { isUnread, type CorsairPort } from "@/server/adapters/corsair";
+import { z } from "zod";
+import { isUnread, routineWindow, type CorsairPort } from "@/server/adapters/corsair";
 import type { LlmMessage, LlmPort, ToolSpec } from "@/server/adapters/llm";
-import { createProposal } from "@/server/actions";
+import { createProposal, isoDatetime } from "@/server/actions";
 import type { Db } from "@/server/db";
 import { sessionMessages } from "@/server/db/schema";
 
 // shortcut: fixed iteration cap; raise when a real workflow needs more tool hops
 const MAX_ITERATIONS = 8;
 
-// propose_send_email only creates a pending approval proposal - never a
-// provider write; the mail leaves exclusively via the approval card (ADR-0001).
+// propose_* tools only create pending approval proposals - never provider
+// writes; every change leaves exclusively via the approval card (ADR-0001).
 export const AGENT_TOOLS: ToolSpec[] = [
   {
     name: "list_emails",
@@ -54,13 +55,81 @@ export const AGENT_TOOLS: ToolSpec[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "list_events",
+    description:
+      "List the user's upcoming calendar events (today through the next 7 days) from the local cache. Returns id, summary, start, end and join link; use the id for reschedule/cancel proposals.",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_schedule_event",
+    description:
+      "Propose creating a calendar event. Creates a pending proposal the user reviews in Chat with Approve, Edit and Discard; nothing is added to the calendar and no attendee is notified until they approve. notify=true emails attendees the invitation on approval, false keeps it silent.",
+    parameters: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "Event title" },
+        start: { type: "string", description: "ISO datetime, e.g. 2026-10-25T10:00:00.000Z" },
+        end: { type: "string", description: "ISO datetime; defaults to one hour after start if omitted" },
+        attendees: {
+          type: "array",
+          items: { type: "string" },
+          description: "Attendee email addresses; empty array when the user is the only participant",
+        },
+        notify: {
+          type: "boolean",
+          description: "Explicit choice: true to email attendees on approval, false to keep it silent",
+        },
+      },
+      required: ["summary", "start", "attendees", "notify"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_reschedule_event",
+    description:
+      "Propose moving an existing event to a new time. Creates a pending proposal; nothing changes on the calendar until the user approves. notify=true emails attendees about the change, false keeps it silent.",
+    parameters: {
+      type: "object",
+      properties: {
+        eventId: { type: "string", description: "Event id from list_events" },
+        summary: { type: "string", description: "The event's title from list_events; shown on the approval card" },
+        start: { type: "string", description: "New ISO datetime start" },
+        end: { type: "string", description: "New ISO datetime end (keep the original duration when the user does not state one)" },
+        notify: { type: "boolean", description: "Explicit choice: true to email attendees, false to stay silent" },
+      },
+      required: ["eventId", "summary", "start", "end", "notify"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_cancel_event",
+    description:
+      "Propose cancelling an existing event. Creates a pending proposal; nothing changes on the calendar until the user approves. notify=true emails attendees the cancellation, false keeps it silent.",
+    parameters: {
+      type: "object",
+      properties: {
+        eventId: { type: "string", description: "Event id from list_events" },
+        summary: { type: "string", description: "The event's title from list_events; shown on the approval card" },
+        notify: { type: "boolean", description: "Explicit choice: true to email attendees, false to stay silent" },
+      },
+      required: ["eventId", "summary", "notify"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const SYSTEM_PROMPT = [
-  "You are the Tsunagu assistant, a concise email aide.",
+  "You are the Tsunagu assistant, a concise email and calendar aide.",
   "You can list/search the inbox and read single emails in full, all from a local cache.",
   "When the user asks to send an email, draft it and call propose_send_email, then tell them it is waiting for approval in Chat; never claim it was sent.",
-  "You cannot modify, delete, archive or label anything, and you have no calendar access yet - never claim otherwise.",
+  "You can see upcoming calendar events with list_events. To schedule, move or cancel an event, call propose_schedule_event, propose_reschedule_event or propose_cancel_event and tell the user it is waiting for approval; nothing reaches the calendar before they approve.",
+  "Always make an explicit notify choice on calendar proposals: true to email attendees about the change, false to keep it silent.",
+  "You cannot modify, delete, archive or label email, and calendar changes only happen through the approval cards.",
   "For 'summarize this email' read it first; for 'summarize my inbox' list first, then answer in a short digest.",
 ].join(" ");
 
@@ -176,6 +245,7 @@ async function executeTool(
         return JSON.stringify({ error: "to, subject and body are required" });
       }
       const proposal = await createProposal(db, tenantId, {
+        kind: "email.send",
         to: args.to,
         subject: args.subject,
         body: args.body,
@@ -184,6 +254,103 @@ async function executeTool(
         status: "pending_approval",
         proposalId: proposal.id,
         message: "Draft created. Nothing was sent; the user must approve it in Chat.",
+      });
+    }
+    if (name === "list_events") {
+      const events = await corsair.listCachedEvents(tenantId, routineWindow());
+      return JSON.stringify(
+        events.map((e) => ({
+          id: e.id,
+          summary: e.summary,
+          start: e.start,
+          end: e.end,
+          joinLink: e.joinLink,
+        })),
+      );
+    }
+    if (name === "propose_schedule_event") {
+      if (typeof args.summary !== "string" || !args.summary.trim() || typeof args.start !== "string" || !args.start) {
+        return JSON.stringify({ error: "summary and start are required" });
+      }
+      // same schema as approve-time validation: reject bad formats here so a
+      // proposal the model is told "pending" never fails approval later
+      if (!isoDatetime.safeParse(args.start).success) {
+        return JSON.stringify({ error: "start must be an ISO datetime, e.g. 2026-10-25T10:00:00.000Z" });
+      }
+      if (typeof args.end === "string" && args.end && !isoDatetime.safeParse(args.end).success) {
+        return JSON.stringify({ error: "end must be an ISO datetime, e.g. 2026-10-25T11:00:00.000Z" });
+      }
+      if (
+        typeof args.notify !== "boolean" ||
+        !Array.isArray(args.attendees) ||
+        args.attendees.some((a) => typeof a !== "string" || !z.email().safeParse(a).success)
+      ) {
+        return JSON.stringify({ error: "attendees (array of email addresses) and notify (true/false choice) are required" });
+      }
+      const proposal = await createProposal(db, tenantId, {
+        kind: "calendar.create",
+        summary: args.summary,
+        start: args.start,
+        ...(typeof args.end === "string" && args.end ? { end: args.end } : {}),
+        attendees: args.attendees as string[],
+        notify: args.notify,
+      });
+      return JSON.stringify({
+        status: "pending_approval",
+        proposalId: proposal.id,
+        message: "Event draft created. Nothing is on the calendar; the user must approve it in Chat.",
+      });
+    }
+    if (name === "propose_reschedule_event") {
+      if (
+        typeof args.eventId !== "string" ||
+        !args.eventId ||
+        typeof args.summary !== "string" ||
+        !args.summary.trim() ||
+        typeof args.start !== "string" ||
+        !args.start ||
+        typeof args.end !== "string" ||
+        !args.end
+      ) {
+        return JSON.stringify({ error: "eventId, summary, start and end are required" });
+      }
+      if (!isoDatetime.safeParse(args.start).success || !isoDatetime.safeParse(args.end).success) {
+        return JSON.stringify({ error: "start and end must be ISO datetimes, e.g. 2026-10-25T10:00:00.000Z" });
+      }
+      if (typeof args.notify !== "boolean") {
+        return JSON.stringify({ error: "notify is required: true to email attendees, false to keep it silent" });
+      }
+      const proposal = await createProposal(db, tenantId, {
+        kind: "calendar.reschedule",
+        eventId: args.eventId,
+        summary: args.summary,
+        start: args.start,
+        end: args.end,
+        notify: args.notify,
+      });
+      return JSON.stringify({
+        status: "pending_approval",
+        proposalId: proposal.id,
+        message: "Reschedule draft created. Nothing changed on the calendar; the user must approve it in Chat.",
+      });
+    }
+    if (name === "propose_cancel_event") {
+      if (typeof args.eventId !== "string" || !args.eventId || typeof args.summary !== "string" || !args.summary.trim()) {
+        return JSON.stringify({ error: "eventId and summary are required" });
+      }
+      if (typeof args.notify !== "boolean") {
+        return JSON.stringify({ error: "notify is required: true to email attendees, false to keep it silent" });
+      }
+      const proposal = await createProposal(db, tenantId, {
+        kind: "calendar.cancel",
+        eventId: args.eventId,
+        summary: args.summary,
+        notify: args.notify,
+      });
+      return JSON.stringify({
+        status: "pending_approval",
+        proposalId: proposal.id,
+        message: "Cancellation draft created. Nothing changed on the calendar; the user must approve it in Chat.",
       });
     }
     return JSON.stringify({ error: `unknown tool ${name}` });

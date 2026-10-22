@@ -10,6 +10,7 @@ import {
   monthWindow,
   type CachedEvent,
   type CachedMessage,
+  type CancelEventInput,
   type ConnectionStatus,
   type Connector,
   type CorsairPort,
@@ -17,6 +18,7 @@ import {
   type EventDateTime,
   type EventWindow,
   type ListMessagesOptions,
+  type RescheduleEventInput,
   type SendEmailInput,
   type SyncResult,
 } from "@/server/adapters/corsair";
@@ -140,12 +142,50 @@ export class RealCorsair implements CorsairPort {
   async createEvent(tenantId: string, input: CreateEventInput) {
     // plugin write-throughs the created event into the cache, so the grid
     // and routine panel reflect it before the next poll
-    await getClient().withTenant(tenantId).googlecalendar.api.events.create({
+    const client = getClient().withTenant(tenantId);
+    const created = await client.googlecalendar.api.events.create({
       event: {
         summary: input.summary,
         start: { dateTime: input.start },
         end: { dateTime: input.end },
+        ...(input.attendees.length ? { attendees: input.attendees.map((email) => ({ email })) } : {}),
       },
+    });
+    // shortcut: plugin 0.1.8 drops sendUpdates on create (verify dist: body only,
+    // no query), so notify=true needs a follow-up update that forwards it;
+    // remove when upstream create accepts sendUpdates
+    if (input.notify && input.attendees.length && created.id) {
+      await client.googlecalendar.api.events.update({
+        id: created.id,
+        event: created,
+        sendUpdates: "all",
+      });
+    }
+  }
+
+  async rescheduleEvent(tenantId: string, input: RescheduleEventInput) {
+    const client = getClient().withTenant(tenantId);
+    // shortcut: get-then-PUT has a lost-update window; merge by event version
+    // if concurrent edits start losing data
+    // update is a PUT replace: carry every current field (attendees,
+    // description, reminders...) and swap only the times
+    const current = await client.googlecalendar.api.events.get({ id: input.eventId });
+    await client.googlecalendar.api.events.update({
+      id: input.eventId,
+      event: {
+        ...current,
+        start: { dateTime: input.start },
+        end: { dateTime: input.end },
+      },
+      sendUpdates: input.notify ? "all" : "none",
+    });
+  }
+
+  async cancelEvent(tenantId: string, input: CancelEventInput) {
+    // plugin drops the cache row itself; no proactive cache delete needed
+    await getClient().withTenant(tenantId).googlecalendar.api.events.delete({
+      id: input.eventId,
+      sendUpdates: input.notify ? "all" : "none",
     });
   }
 

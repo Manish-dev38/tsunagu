@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { runChatTurn } from "@/server/agent";
-import { performWrite } from "@/server/actions";
+import { isoDatetime, performWrite, PROPOSAL_KINDS, type ActionWrite } from "@/server/actions";
 import { CONNECTORS, routineWindow } from "@/server/adapters/corsair";
 import { actions, sessionMessages, sessions } from "@/server/db/schema";
 import { getLastSync, recordSync } from "@/server/sync/state";
@@ -14,6 +14,70 @@ const connectorSchema = z.enum(CONNECTORS);
 // One draft shape for every email send: human compose, agent proposal,
 // and approval-card edits.
 const emailDraftSchema = z.object({ to: z.string().min(1), subject: z.string(), body: z.string() });
+
+const scheduleEventSchema = z.object({
+  summary: z.string().min(1),
+  start: isoDatetime,
+  end: isoDatetime.optional(),
+  attendees: z.array(z.email()).default([]),
+  notify: z.boolean(),
+});
+
+const rescheduleEventSchema = z.object({
+  eventId: z.string().min(1),
+  summary: z.string().min(1),
+  start: isoDatetime,
+  end: isoDatetime,
+  notify: z.boolean(),
+});
+
+const cancelEventSchema = z.object({
+  eventId: z.string().min(1),
+  summary: z.string().min(1),
+  notify: z.boolean(),
+});
+
+// Validates a proposal payload against its kind's schema and maps it to the
+// execute-time write; the create default (end = start + 1h) resolves here so
+// edit stores the effective payload the card then shows.
+function proposalWrite(kind: string, payload: unknown): ActionWrite {
+  if (kind === "email.send") {
+    const r = emailDraftSchema.safeParse(payload);
+    if (!r.success) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "proposal payload is not a valid email draft" });
+    }
+    return { kind: "email.send", ...r.data };
+  }
+  if (kind === "calendar.create") {
+    const r = scheduleEventSchema.safeParse(payload);
+    if (!r.success) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "proposal payload is not a valid event schedule" });
+    }
+    return {
+      kind: "calendar.create",
+      summary: r.data.summary,
+      start: r.data.start,
+      end: r.data.end ?? new Date(Date.parse(r.data.start) + 3_600_000).toISOString(),
+      attendees: r.data.attendees,
+      notify: r.data.notify,
+    };
+  }
+  if (kind === "calendar.reschedule") {
+    const r = rescheduleEventSchema.safeParse(payload);
+    if (!r.success) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "proposal payload is not a valid reschedule" });
+    }
+    return { kind: "calendar.reschedule", ...r.data };
+  }
+  if (kind === "calendar.cancel") {
+    const r = cancelEventSchema.safeParse(payload);
+    if (!r.success) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "proposal payload is not a valid cancellation" });
+    }
+    return { kind: "calendar.cancel", ...r.data };
+  }
+  throw new TRPCError({ code: "BAD_REQUEST", message: "unknown proposal kind" });
+}
 
 const connectorsRouter = router({
   list: protectedProcedure.query(({ ctx }) => ctx.corsair.connectionStatus(ctx.tenantId)),
@@ -159,7 +223,7 @@ const chatRouter = router({
       .where(
         and(
           eq(actions.tenantId, ctx.tenantId),
-          eq(actions.kind, "email.send"),
+          inArray(actions.kind, PROPOSAL_KINDS),
           eq(actions.initiator, "agent"),
           inArray(actions.status, ["pending", "edited"]),
         ),
@@ -171,8 +235,10 @@ const chatRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const proposal = await loadProposal(ctx.db, input.id, ctx.tenantId);
+      // validate before claiming: a corrupt payload must not burn the proposal
+      const write = proposalWrite(proposal.kind, proposal.payload);
       // the status guard is the claim: only one concurrent approve/discard/edit
-      // can move pending|edited -> approved, so the send happens exactly once
+      // can move pending|edited -> approved, so the write happens exactly once
       const claimed = await ctx.db
         .update(actions)
         .set({ status: "approved" })
@@ -185,30 +251,36 @@ const chatRouter = router({
         )
         .returning({ id: actions.id });
       if (claimed.length === 0) throw new TRPCError({ code: "CONFLICT" });
-      const parsed = emailDraftSchema.safeParse(proposal.payload);
-      if (!parsed.success) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "proposal payload is not a valid email draft" });
-      }
       return performWrite(
         ctx.db,
         ctx.corsair,
         ctx.tenantId,
-        { kind: "email.send", ...parsed.data },
+        write,
         { actionId: proposal.id },
       );
     }),
 
   editProposal: protectedProcedure
-    .input(z.object({ id: z.string() }).extend(emailDraftSchema.shape))
+    // loose: the payload keys depend on the proposal's kind; proposalWrite
+    // validates them against that kind's schema below
+    .input(z.object({ id: z.string().min(1) }).loose())
     .mutation(async ({ ctx, input }) => {
       const proposal = await loadProposal(ctx.db, input.id, ctx.tenantId);
-      await ctx.db
+      const write = proposalWrite(proposal.kind, input);
+      const payload: Record<string, unknown> = { ...write };
+      delete payload.kind;
+      const updated = await ctx.db
         .update(actions)
-        .set({
-          status: "edited",
-          payload: { to: input.to, subject: input.subject, body: input.body },
-        })
-        .where(eq(actions.id, proposal.id));
+        .set({ status: "edited", payload })
+        .where(
+          and(
+            eq(actions.id, proposal.id),
+            eq(actions.tenantId, ctx.tenantId),
+            inArray(actions.status, ["pending", "edited"]),
+          ),
+        )
+        .returning({ id: actions.id });
+      if (updated.length === 0) throw new TRPCError({ code: "CONFLICT" });
       return { id: proposal.id, status: "edited" as const };
     }),
 
@@ -216,10 +288,20 @@ const chatRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const proposal = await loadProposal(ctx.db, input.id, ctx.tenantId);
-      await ctx.db
+      // same claim guard as approve/edit: never flip an executed write back,
+      // the Action row is the audit trail (ADR-0001)
+      const discarded = await ctx.db
         .update(actions)
         .set({ status: "discarded" })
-        .where(eq(actions.id, proposal.id));
+        .where(
+          and(
+            eq(actions.id, proposal.id),
+            eq(actions.tenantId, ctx.tenantId),
+            inArray(actions.status, ["pending", "edited"]),
+          ),
+        )
+        .returning({ id: actions.id });
+      if (discarded.length === 0) throw new TRPCError({ code: "CONFLICT" });
       return { id: proposal.id, status: "discarded" as const };
     }),
 });
@@ -233,7 +315,7 @@ async function loadProposal(db: Context["db"], id: string, tenantId: string) {
         eq(actions.id, id),
         eq(actions.tenantId, tenantId),
         eq(actions.initiator, "agent"),
-        eq(actions.kind, "email.send"),
+        inArray(actions.kind, PROPOSAL_KINDS),
       ),
     )
     .limit(1);
@@ -253,10 +335,8 @@ async function assertSession(db: Context["db"], sessionId: string, tenantId: str
   if (!session) throw new TRPCError({ code: "NOT_FOUND" });
 }
 
-const isoDatetime = z.iso.datetime("must be an ISO datetime");
-
 // Human calendar writes are ungated like inbox writes (ADR-0001: the user is
-// the approval); the agent gets no calendar tool until #9.
+// the approval); agent calendar writes go through the approval cards (#9).
 const calendarRouter = router({
   refresh: protectedProcedure.mutation(async ({ ctx }) => {
     const result = await ctx.corsair.syncCalendar(ctx.tenantId);
@@ -292,6 +372,8 @@ const calendarRouter = router({
         summary: input.summary,
         start: input.start,
         end,
+        attendees: [],
+        notify: false,
       });
     }),
 });

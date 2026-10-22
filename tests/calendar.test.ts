@@ -84,6 +84,8 @@ describe("router seam: calendar (ticket #8)", () => {
         summary: "Standup",
         start,
         end: new Date(Date.parse(start) + 3_600_000).toISOString(),
+        attendees: [],
+        notify: false,
       },
     ]);
     // ungated like inbox writes: no proposal row anywhere

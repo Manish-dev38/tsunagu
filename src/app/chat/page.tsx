@@ -40,11 +40,16 @@ export default function ChatPage() {
   const proposals = api.chat.proposals.useQuery();
 
   const approve = api.chat.approve.useMutation({
-    onSuccess: () => {
+    onSuccess: (result) => {
       setError(null);
       void utils.chat.proposals.invalidate();
-      // the mail actually left; refresh the inbox cache view too
-      void utils.inbox.list.invalidate();
+      // refresh the view the write actually feeds
+      if (result.kind.startsWith("calendar.")) {
+        void utils.calendar.routine.invalidate();
+        void utils.calendar.events.invalidate();
+      } else {
+        void utils.inbox.list.invalidate();
+      }
     },
     onError: (e) => setError(e.message),
   });
