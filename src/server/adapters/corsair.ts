@@ -55,6 +55,77 @@ export interface SendEmailInput {
   body: string;
 }
 
+export interface EventDateTime {
+  date?: string;
+  dateTime?: string;
+  timeZone?: string;
+}
+
+export interface CachedEvent {
+  id: string;
+  summary: string;
+  start: EventDateTime;
+  end: EventDateTime;
+  htmlLink: string;
+  joinLink: string;
+}
+
+export interface CreateEventInput {
+  summary: string;
+  start: string; // ISO datetime
+  end: string; // ISO datetime
+}
+
+// Half-open window [timeMin, timeMax) over ISO datetimes.
+export interface EventWindow {
+  timeMin: string;
+  timeMax: string;
+}
+
+function startOfDay(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+// Routine panel window: today through +7 calendar days inclusive
+// (spec: includes day 7, excludes day 8).
+export function routineWindow(now = new Date()): EventWindow {
+  const min = startOfDay(now);
+  const max = new Date(min);
+  max.setDate(max.getDate() + 8);
+  return { timeMin: min.toISOString(), timeMax: max.toISOString() };
+}
+
+// Sync/cache window: the current month plus one month either side, so the
+// grid can navigate a month out without a fresh poll. shortcut: fixed
+// +/-1 month, widen when users navigate further than that.
+export function monthWindow(now = new Date()): EventWindow {
+  const min = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const max = new Date(now.getFullYear(), now.getMonth() + 2, 1);
+  return { timeMin: min.toISOString(), timeMax: max.toISOString() };
+}
+
+function eventStart(event: CachedEvent): Date {
+  if (event.start.dateTime) return new Date(event.start.dateTime);
+  // all-day events carry a bare date: parse it as a LOCAL calendar day, not a
+  // UTC instant, so the day-boundary routine window holds in every timezone
+  const [y, m, d] = (event.start.date ?? "").split("-").map(Number);
+  if (!y || !m || !d) return new Date(0);
+  return new Date(y, m - 1, d);
+}
+
+export function inEventWindow(event: CachedEvent, window: EventWindow): boolean {
+  const t = eventStart(event).getTime();
+  return t >= Date.parse(window.timeMin) && t < Date.parse(window.timeMax);
+}
+
+export function applyEventWindow(events: CachedEvent[], window: EventWindow): CachedEvent[] {
+  return events
+    .filter((event) => inEventWindow(event, window))
+    .sort((a, b) => eventStart(a).getTime() - eventStart(b).getTime());
+}
+
 export interface MailboxWrites {
   sendEmail(tenantId: string, input: SendEmailInput): Promise<void>;
   archiveMessage(tenantId: string, messageId: string): Promise<void>;
@@ -62,14 +133,20 @@ export interface MailboxWrites {
   setRead(tenantId: string, messageId: string, read: boolean): Promise<void>;
 }
 
-export interface CorsairPort extends MailboxWrites {
+export interface CalendarWrites {
+  createEvent(tenantId: string, input: CreateEventInput): Promise<void>;
+}
+
+export interface CorsairPort extends MailboxWrites, CalendarWrites {
   connectionStatus(tenantId: string): Promise<ConnectionStatus>;
   createConnectLink(tenantId: string, connector: Connector): Promise<{ connectUrl: string }>;
   disconnect(tenantId: string, connector: Connector): Promise<{ disconnected: boolean }>;
   listCachedMessages(tenantId: string, opts?: ListMessagesOptions): Promise<CachedMessage[]>;
   cachedUnreadCount(tenantId: string): Promise<number>;
   getCachedMessage(tenantId: string, messageId: string): Promise<CachedMessage | null>;
+  listCachedEvents(tenantId: string, window: EventWindow): Promise<CachedEvent[]>;
   syncGmail(tenantId: string): Promise<SyncResult>;
+  syncCalendar(tenantId: string): Promise<SyncResult>;
 }
 
 export class CorsairFake implements CorsairPort {
@@ -77,7 +154,10 @@ export class CorsairFake implements CorsairPort {
   private pending = new Set<string>();
   private liveMailbox = new Map<string, CachedMessage[]>();
   private cache = new Map<string, Map<string, CachedMessage>>();
+  private liveCalendar = new Map<string, CachedEvent[]>();
+  private eventCache = new Map<string, Map<string, CachedEvent>>();
   sent: Array<SendEmailInput & { tenantId: string }> = [];
+  createdEvents: Array<CreateEventInput & { tenantId: string }> = [];
   failWrite: Error | null = null;
 
   async connectionStatus(tenantId: string): Promise<ConnectionStatus> {
@@ -121,6 +201,27 @@ export class CorsairFake implements CorsairPort {
     this.setLabel(tenantId, messageId, "UNREAD", !read);
   }
 
+  async createEvent(tenantId: string, input: CreateEventInput) {
+    if (this.failWrite) throw this.failWrite;
+    this.createdEvents.push({ tenantId, ...input });
+    // write-through like the real plugin: cached AND visible to the next sync,
+    // which would otherwise drop it as provider-absent
+    const event: CachedEvent = {
+      id: `evt_created_${this.createdEvents.length}`,
+      summary: input.summary,
+      start: { dateTime: input.start },
+      end: { dateTime: input.end },
+      htmlLink: "",
+      joinLink: "",
+    };
+    const cache = this.eventCache.get(tenantId) ?? new Map<string, CachedEvent>();
+    cache.set(event.id, event);
+    this.eventCache.set(tenantId, cache);
+    const live = this.liveCalendar.get(tenantId) ?? [];
+    live.push(event);
+    this.liveCalendar.set(tenantId, live);
+  }
+
   // mutates cache and live mailbox alike so a later sync cannot resurrect stale labels
   private setLabel(tenantId: string, messageId: string, label: string, present: boolean) {
     const cached = this.cache.get(tenantId)?.get(messageId);
@@ -148,6 +249,33 @@ export class CorsairFake implements CorsairPort {
 
   seedLiveMailbox(tenantId: string, messages: CachedMessage[]): void {
     this.liveMailbox.set(tenantId, messages);
+  }
+
+  seedLiveCalendar(tenantId: string, events: CachedEvent[]): void {
+    this.liveCalendar.set(tenantId, events);
+  }
+
+  async listCachedEvents(tenantId: string, window: EventWindow): Promise<CachedEvent[]> {
+    return applyEventWindow([...(this.eventCache.get(tenantId)?.values() ?? [])], window);
+  }
+
+  async syncCalendar(tenantId: string): Promise<SyncResult> {
+    // mirrors the real adapter: only the sync window is fetched, and cached
+    // rows inside that window the provider no longer returns are dropped
+    const window = monthWindow();
+    const live = (this.liveCalendar.get(tenantId) ?? []).filter((e) => inEventWindow(e, window));
+    const cache = this.eventCache.get(tenantId) ?? new Map<string, CachedEvent>();
+    const liveIds = new Set(live.map((e) => e.id));
+    let deleted = 0;
+    for (const [id, event] of [...cache]) {
+      if (!liveIds.has(id) && inEventWindow(event, window)) {
+        cache.delete(id);
+        deleted++;
+      }
+    }
+    for (const event of live) cache.set(event.id, { ...event });
+    this.eventCache.set(tenantId, cache);
+    return { syncedAt: new Date().toISOString(), synced: live.length, deleted };
   }
 
   async syncGmail(tenantId: string): Promise<SyncResult> {

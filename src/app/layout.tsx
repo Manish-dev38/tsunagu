@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { InboxBadge } from "./inbox-badge";
+import { RoutinePanel } from "./routine-panel";
 import { TRPCProvider } from "@/trpc/provider";
 import "./globals.css";
 
@@ -14,7 +15,7 @@ const NAV: { label: string; href?: string; badge?: boolean }[] = [
   { label: "Action" },
   { label: "Inbox", href: "/inbox", badge: true },
   { label: "Memory" },
-  { label: "Calendar" },
+  { label: "Calendar", href: "/calendar" },
   { label: "Routine" },
   { label: "Connector", href: "/connector" },
   { label: "Account" },
@@ -48,7 +49,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <main className="flex-1 p-8">{children}</main>
             <aside className="hidden w-72 shrink-0 border-l border-neutral-200 p-4 lg:block">
               <div className="mb-4 text-sm font-semibold text-neutral-500">Routine</div>
-              <p className="text-sm text-neutral-400">Nothing scheduled yet.</p>
+              <RoutinePanel />
             </aside>
           </div>
         </TRPCProvider>

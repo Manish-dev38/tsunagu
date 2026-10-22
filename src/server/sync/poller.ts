@@ -21,8 +21,13 @@ export class Poller {
 
   async pollTenant(tenantId: string): Promise<void> {
     for (const provider of this.providers) {
-      const { syncedAt } = await provider.sync(tenantId);
-      await recordSync(this.db, tenantId, provider.name, new Date(syncedAt));
+      try {
+        const { syncedAt } = await provider.sync(tenantId);
+        await recordSync(this.db, tenantId, provider.name, new Date(syncedAt));
+      } catch {
+        // one disconnected provider must not starve the others
+        // (e.g. a tenant with only Google Calendar connected)
+      }
     }
   }
 
@@ -53,9 +58,12 @@ export class Poller {
 
 let running: Poller | undefined;
 
-// Interval polling assumes one long-lived Node process (next start), not serverless
-// cold starts; Calendar (#7) adds another provider entry — the shape is the contract
+// Interval polling assumes one long-lived Node process (next start), not
+// serverless cold starts; each connector is one SyncProvider entry.
 export function ensurePolling(db: Db, corsair: CorsairPort): void {
-  running ??= new Poller(db, [{ name: "gmail", sync: (tenantId) => corsair.syncGmail(tenantId) }]);
+  running ??= new Poller(db, [
+    { name: "gmail", sync: (tenantId) => corsair.syncGmail(tenantId) },
+    { name: "googlecalendar", sync: (tenantId) => corsair.syncCalendar(tenantId) },
+  ]);
   running.start();
 }

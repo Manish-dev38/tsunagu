@@ -4,7 +4,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { runChatTurn } from "@/server/agent";
 import { performWrite } from "@/server/actions";
-import { CONNECTORS } from "@/server/adapters/corsair";
+import { CONNECTORS, routineWindow } from "@/server/adapters/corsair";
 import { actions, sessionMessages, sessions } from "@/server/db/schema";
 import { getLastSync, recordSync } from "@/server/sync/state";
 import { protectedProcedure, router, type Context } from "./trpc";
@@ -253,6 +253,49 @@ async function assertSession(db: Context["db"], sessionId: string, tenantId: str
   if (!session) throw new TRPCError({ code: "NOT_FOUND" });
 }
 
+const isoDatetime = z.iso.datetime("must be an ISO datetime");
+
+// Human calendar writes are ungated like inbox writes (ADR-0001: the user is
+// the approval); the agent gets no calendar tool until #9.
+const calendarRouter = router({
+  refresh: protectedProcedure.mutation(async ({ ctx }) => {
+    const result = await ctx.corsair.syncCalendar(ctx.tenantId);
+    await recordSync(ctx.db, ctx.tenantId, "googlecalendar", new Date(result.syncedAt));
+    return result;
+  }),
+
+  routine: protectedProcedure.query(({ ctx }) =>
+    ctx.corsair.listCachedEvents(ctx.tenantId, routineWindow()),
+  ),
+
+  events: protectedProcedure
+    .input(z.object({ timeMin: isoDatetime, timeMax: isoDatetime }))
+    .query(({ ctx, input }) =>
+      ctx.corsair.listCachedEvents(ctx.tenantId, {
+        timeMin: input.timeMin,
+        timeMax: input.timeMax,
+      }),
+    ),
+
+  createEvent: protectedProcedure
+    .input(
+      z.object({
+        summary: z.string().min(1),
+        start: isoDatetime,
+        end: isoDatetime.optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) => {
+      const end = input.end ?? new Date(Date.parse(input.start) + 3_600_000).toISOString();
+      return performWrite(ctx.db, ctx.corsair, ctx.tenantId, {
+        kind: "calendar.create",
+        summary: input.summary,
+        start: input.start,
+        end,
+      });
+    }),
+});
+
 export const appRouter = router({
   me: protectedProcedure.query(({ ctx }) => ({
     tenantId: ctx.tenantId,
@@ -261,6 +304,7 @@ export const appRouter = router({
   connectors: connectorsRouter,
   inbox: inboxRouter,
   chat: chatRouter,
+  calendar: calendarRouter,
 });
 
 export type AppRouter = typeof appRouter;

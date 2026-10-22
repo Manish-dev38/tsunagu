@@ -3,12 +3,19 @@ import { gmail } from "@corsair-dev/gmail";
 import { googlecalendar } from "@corsair-dev/googlecalendar";
 import { Pool } from "pg";
 import {
+  applyEventWindow,
   applyListOptions,
+  inEventWindow,
   isUnread,
+  monthWindow,
+  type CachedEvent,
   type CachedMessage,
   type ConnectionStatus,
   type Connector,
   type CorsairPort,
+  type CreateEventInput,
+  type EventDateTime,
+  type EventWindow,
   type ListMessagesOptions,
   type SendEmailInput,
   type SyncResult,
@@ -91,6 +98,55 @@ export class RealCorsair implements CorsairPort {
       }
     }
     return { syncedAt: new Date().toISOString(), synced: liveIds.length, deleted };
+  }
+
+  async syncCalendar(tenantId: string): Promise<SyncResult> {
+    const client = getClient().withTenant(tenantId);
+    const window = monthWindow();
+    // shortcut: fixed ±1-month window, first page only, no delta sync;
+    // paginate/switch to sync tokens when a calendar outgrows it
+    // cast: corsair's generic client types collapse to any through the plugin chain
+    const res = (await client.googlecalendar.api.events.getMany({
+      timeMin: window.timeMin,
+      timeMax: window.timeMax,
+      singleEvents: true,
+      orderBy: "startTime",
+      maxResults: 250,
+    })) as { items?: { id?: string }[] };
+    // getMany already write-throughs every returned event into the cache
+    const liveIds = new Set((res.items ?? []).flatMap((item) => (item.id ? [item.id] : [])));
+    // deletions: cached rows inside the window the provider no longer returns
+    let deleted = 0;
+    const cached = (await client.googlecalendar.db.events.list({ limit: 1000 })) as EventEntityRow[];
+    for (const row of cached) {
+      const event = toCachedEvent(row);
+      if (!liveIds.has(event.id) && inEventWindow(event, window)) {
+        await client.googlecalendar.db.events.deleteByEntityId(row.entity_id);
+        deleted++;
+      }
+    }
+    return { syncedAt: new Date().toISOString(), synced: liveIds.size, deleted };
+  }
+
+  async listCachedEvents(tenantId: string, window: EventWindow): Promise<CachedEvent[]> {
+    // shortcut: scans at most 500 cached rows and filters in-process,
+    // DB-side window query when a calendar outgrows it
+    const rows = (await getClient()
+      .withTenant(tenantId)
+      .googlecalendar.db.events.list({ limit: 500 })) as EventEntityRow[];
+    return applyEventWindow(rows.map(toCachedEvent), window);
+  }
+
+  async createEvent(tenantId: string, input: CreateEventInput) {
+    // plugin write-throughs the created event into the cache, so the grid
+    // and routine panel reflect it before the next poll
+    await getClient().withTenant(tenantId).googlecalendar.api.events.create({
+      event: {
+        summary: input.summary,
+        start: { dateTime: input.start },
+        end: { dateTime: input.end },
+      },
+    });
   }
 
   async listCachedMessages(tenantId: string, opts: ListMessagesOptions = {}): Promise<CachedMessage[]> {
@@ -178,5 +234,42 @@ function toCachedMessage(row: {
     to: row.data.to ?? "",
     body: row.data.body ?? "",
     internalDate: row.data.internalDate ?? "",
+  };
+}
+
+type EventEntityRow = {
+  entity_id: string;
+  data: {
+    id?: string | null;
+    summary?: string | null;
+    start?: EventDateTime | null;
+    end?: EventDateTime | null;
+    htmlLink?: string | null;
+    hangoutLink?: string | null;
+    conferenceData?: { entryPoints?: { entryPointType?: string; uri?: string }[] | null } | null;
+  };
+};
+
+function toCachedEvent(row: EventEntityRow): CachedEvent {
+  const videoEntry = row.data.conferenceData?.entryPoints?.find(
+    (entry) => entry.entryPointType === "video" && entry.uri,
+  );
+  const start: EventDateTime = {
+    date: row.data.start?.date ?? undefined,
+    dateTime: row.data.start?.dateTime ?? undefined,
+    timeZone: row.data.start?.timeZone ?? undefined,
+  };
+  const end: EventDateTime = {
+    date: row.data.end?.date ?? undefined,
+    dateTime: row.data.end?.dateTime ?? undefined,
+    timeZone: row.data.end?.timeZone ?? undefined,
+  };
+  return {
+    id: row.entity_id,
+    summary: row.data.summary ?? "",
+    start,
+    end,
+    htmlLink: row.data.htmlLink ?? "",
+    joinLink: row.data.hangoutLink ?? videoEntry?.uri ?? "",
   };
 }

@@ -1,16 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import type { MailboxWrites } from "@/server/adapters/corsair";
+import type { CalendarWrites, MailboxWrites } from "@/server/adapters/corsair";
 import type { Db } from "@/server/db";
 import { actions } from "@/server/db/schema";
 
-export type MailWrite =
+export type ActionWrite =
   | { kind: "email.send"; to: string; subject: string; body: string }
   | { kind: "mail.archive"; messageId: string }
   | { kind: "mail.star"; messageId: string }
   | { kind: "mail.unstar"; messageId: string }
   | { kind: "mail.mark_read"; messageId: string }
-  | { kind: "mail.mark_unread"; messageId: string };
+  | { kind: "mail.mark_unread"; messageId: string }
+  | { kind: "calendar.create"; summary: string; start: string; end: string };
 
 export interface EmailSendPayload {
   to: string;
@@ -20,7 +21,7 @@ export interface EmailSendPayload {
 
 export interface WrittenAction {
   id: string;
-  kind: MailWrite["kind"];
+  kind: ActionWrite["kind"];
   status: "executed" | "failed";
 }
 
@@ -47,9 +48,9 @@ export async function createProposal(
 // arrive here after the approval card, updating the proposal row (ADR-0001).
 export async function performWrite(
   db: Db,
-  corsair: MailboxWrites,
+  corsair: MailboxWrites & CalendarWrites,
   tenantId: string,
-  write: MailWrite,
+  write: ActionWrite,
   // actionId set = follow-up on an existing proposal row (agent path); the
   // row is already initiator=agent and status=approved from the claim step.
   opts?: { actionId: string },
@@ -62,6 +63,13 @@ export async function performWrite(
           to: write.to,
           subject: write.subject,
           body: write.body,
+        });
+        break;
+      case "calendar.create":
+        await corsair.createEvent(tenantId, {
+          summary: write.summary,
+          start: write.start,
+          end: write.end,
         });
         break;
       case "mail.archive":
