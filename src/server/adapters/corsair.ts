@@ -143,6 +143,7 @@ export function applyEventWindow(events: CachedEvent[], window: EventWindow): Ca
 export interface MailboxWrites {
   sendEmail(tenantId: string, input: SendEmailInput): Promise<void>;
   archiveMessage(tenantId: string, messageId: string): Promise<void>;
+  unarchiveMessage(tenantId: string, messageId: string): Promise<void>;
   setStarred(tenantId: string, messageId: string, starred: boolean): Promise<void>;
   setRead(tenantId: string, messageId: string, read: boolean): Promise<void>;
 }
@@ -206,6 +207,14 @@ export class CorsairFake implements CorsairPort {
     this.setLabel(tenantId, messageId, "INBOX", false);
     // drop from cache so the list reflects the archive before the next poll
     this.cache.get(tenantId)?.delete(messageId);
+  }
+
+  async unarchiveMessage(tenantId: string, messageId: string) {
+    if (this.failWrite) throw this.failWrite;
+    this.setLabel(tenantId, messageId, "INBOX", true);
+    // restore the cache copy the archive dropped so undo is visible in the list
+    const live = (this.liveMailbox.get(tenantId) ?? []).find((m) => m.id === messageId);
+    if (live) this.cache.get(tenantId)?.set(messageId, { ...live });
   }
 
   async setStarred(tenantId: string, messageId: string, starred: boolean) {

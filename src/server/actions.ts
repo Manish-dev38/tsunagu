@@ -11,6 +11,7 @@ export const isoDatetime = z.iso.datetime("must be an ISO datetime");
 export type ActionWrite =
   | { kind: "email.send"; to: string; subject: string; body: string }
   | { kind: "mail.archive"; messageId: string }
+  | { kind: "mail.unarchive"; messageId: string }
   | { kind: "mail.star"; messageId: string }
   | { kind: "mail.unstar"; messageId: string }
   | { kind: "mail.mark_read"; messageId: string }
@@ -107,6 +108,9 @@ export async function performWrite(
       case "mail.archive":
         await corsair.archiveMessage(tenantId, write.messageId);
         break;
+      case "mail.unarchive":
+        await corsair.unarchiveMessage(tenantId, write.messageId);
+        break;
       case "mail.star":
         await corsair.setStarred(tenantId, write.messageId, true);
         break;
@@ -131,7 +135,9 @@ export async function performWrite(
       .set({ status })
       .where(and(eq(actions.id, id), eq(actions.tenantId, tenantId)));
   } else {
-    await db.insert(actions).values({ id, tenantId, kind: write.kind, initiator: "human", status });
+    // payload records what was written (e.g. messageId) so undo can reverse it
+    const { kind, ...payload } = write;
+    await db.insert(actions).values({ id, tenantId, kind, initiator: "human", status, payload });
   }
   if (error) throw error;
   return { id, kind: write.kind, status };

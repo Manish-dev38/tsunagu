@@ -228,6 +228,10 @@ export class RealCorsair implements CorsairPort {
     await client.gmail.db.messages.deleteByEntityId(messageId).catch(() => undefined);
   }
 
+  async unarchiveMessage(tenantId: string, messageId: string) {
+    await this.modifyLabel(tenantId, messageId, "INBOX", true);
+  }
+
   async setStarred(tenantId: string, messageId: string, starred: boolean) {
     await this.modifyLabel(tenantId, messageId, "STARRED", starred);
   }

@@ -424,6 +424,49 @@ const memoryRouter = router({
     }),
 });
 
+// Undo-where-possible (ADR-0001): one-step reversal of executed archive/star
+// rows; everything else (sent mail, proposals, calendar, failed rows) offers none.
+const UNDOABLE: Partial<Record<string, (messageId: string) => ActionWrite>> = {
+  "mail.archive": (messageId) => ({ kind: "mail.unarchive", messageId }),
+  "mail.star": (messageId) => ({ kind: "mail.unstar", messageId }),
+};
+
+const actionRouter = router({
+  list: protectedProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select()
+      .from(actions)
+      .where(eq(actions.tenantId, ctx.tenantId))
+      .orderBy(desc(actions.createdAt));
+    // flag mirrors the undo mutation's guard: legacy rows without a payload
+    // messageId would offer a button that can only fail with CONFLICT
+    return rows.map((row) => {
+      const messageId = (row.payload as { messageId?: unknown } | null)?.messageId;
+      return {
+        ...row,
+        undoable: row.status === "executed" && typeof messageId === "string" && row.kind in UNDOABLE,
+      };
+    });
+  }),
+
+  undo: protectedProcedure
+    .input(z.object({ actionId: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const [row] = await ctx.db
+        .select()
+        .from(actions)
+        .where(and(eq(actions.id, input.actionId), eq(actions.tenantId, ctx.tenantId)));
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+      const messageId = (row.payload as { messageId?: string } | null)?.messageId;
+      const undoWrite = messageId ? UNDOABLE[row.kind]?.(messageId) : undefined;
+      if (!undoWrite || row.status !== "executed") {
+        throw new TRPCError({ code: "CONFLICT", message: "this action cannot be undone" });
+      }
+      // reverses through the shared write pipeline, which logs a new Action
+      return performWrite(ctx.db, ctx.corsair, ctx.tenantId, undoWrite);
+    }),
+});
+
 export const appRouter = router({
   me: protectedProcedure.query(({ ctx }) => ({
     tenantId: ctx.tenantId,
@@ -434,6 +477,7 @@ export const appRouter = router({
   chat: chatRouter,
   calendar: calendarRouter,
   memory: memoryRouter,
+  action: actionRouter,
 });
 
 export type AppRouter = typeof appRouter;

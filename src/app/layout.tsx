@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 
 const NAV: { label: string; href?: string; badge?: boolean }[] = [
   { label: "Chat", href: "/chat" },
-  { label: "Action" },
+  { label: "Action", href: "/action" },
   { label: "Inbox", href: "/inbox", badge: true },
   { label: "Memory", href: "/memory" },
   { label: "Calendar", href: "/calendar" },
