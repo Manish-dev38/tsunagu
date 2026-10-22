@@ -143,7 +143,7 @@ describe("router seam: chat sessions, streaming, agent reads", () => {
     expect(JSON.stringify(llm.requests[1].messages)).toContain("Your receipt");
   });
 
-  it("offers only cache reads plus the gated proposal tools", async () => {
+  it("offers cache reads, gated proposal tools, and memory extraction only", async () => {
     const llm = new LlmFake().script({ text: "Sure" });
     const caller = makeCaller("tenant_ro", db, new CorsairFake(), llm);
 
@@ -158,6 +158,7 @@ describe("router seam: chat sessions, streaming, agent reads", () => {
       "propose_schedule_event",
       "propose_reschedule_event",
       "propose_cancel_event",
+      "store_memory",
     ]);
     for (const request of llm.requests) {
       // no direct provider writes exist for the model; propose is gated (ADR-0001)

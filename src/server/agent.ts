@@ -5,7 +5,7 @@ import { isUnread, routineWindow, type CorsairPort } from "@/server/adapters/cor
 import type { LlmMessage, LlmPort, ToolSpec } from "@/server/adapters/llm";
 import { createProposal, isoDatetime } from "@/server/actions";
 import type { Db } from "@/server/db";
-import { sessionMessages } from "@/server/db/schema";
+import { sessionMessages, memory } from "@/server/db/schema";
 
 // shortcut: fixed iteration cap; raise when a real workflow needs more tool hops
 const MAX_ITERATIONS = 8;
@@ -121,6 +121,17 @@ export const AGENT_TOOLS: ToolSpec[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: "store_memory",
+    description:
+      "Save one durable fact about the user (identity, preferences, recurring context) for future conversations. Call only when this turn actually surfaced such a fact.",
+    parameters: {
+      type: "object",
+      properties: { fact: { type: "string", description: "The fact, one sentence" } },
+      required: ["fact"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const SYSTEM_PROMPT = [
@@ -131,6 +142,7 @@ const SYSTEM_PROMPT = [
   "Always make an explicit notify choice on calendar proposals: true to email attendees about the change, false to keep it silent.",
   "You cannot modify, delete, archive or label email, and calendar changes only happen through the approval cards.",
   "For 'summarize this email' read it first; for 'summarize my inbox' list first, then answer in a short digest.",
+  "When this conversation surfaces a durable fact about the user (preferences, identity, routine), call store_memory before finishing; an explicit 'remember …' from the user is stored automatically.",
 ].join(" ");
 
 export type ChatTurnEvent =
@@ -160,10 +172,20 @@ export async function* runChatTurn(opts: {
     .where(eq(sessionMessages.sessionId, sessionId))
     .orderBy(asc(sessionMessages.createdAt));
 
-  const messages: LlmMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-  ];
+  const messages: LlmMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
+  // Memory is read at the start of every turn so the model acts on what it knows.
+  const memories = await db
+    .select()
+    .from(memory)
+    .where(eq(memory.tenantId, tenantId))
+    .orderBy(asc(memory.createdAt));
+  if (memories.length > 0) {
+    messages.push({
+      role: "system",
+      content: `Memory about the user (use when relevant):\n${memories.map((m) => `- ${m.content}`).join("\n")}`,
+    });
+  }
+  messages.push(...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
 
   let seen = "";
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
@@ -352,6 +374,14 @@ async function executeTool(
         proposalId: proposal.id,
         message: "Cancellation draft created. Nothing changed on the calendar; the user must approve it in Chat.",
       });
+    }
+    if (name === "store_memory") {
+      const fact = typeof args.fact === "string" ? args.fact.trim() : "";
+      if (!fact || fact.length > 500) {
+        return JSON.stringify({ error: "fact is required (one sentence, max 500 chars)" });
+      }
+      await db.insert(memory).values({ id: randomUUID(), tenantId, content: fact, source: "extracted" });
+      return JSON.stringify({ status: "stored", message: "Saved to Memory." });
     }
     return JSON.stringify({ error: `unknown tool ${name}` });
   } catch (e) {

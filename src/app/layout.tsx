@@ -14,7 +14,7 @@ const NAV: { label: string; href?: string; badge?: boolean }[] = [
   { label: "Chat", href: "/chat" },
   { label: "Action" },
   { label: "Inbox", href: "/inbox", badge: true },
-  { label: "Memory" },
+  { label: "Memory", href: "/memory" },
   { label: "Calendar", href: "/calendar" },
   { label: "Routine" },
   { label: "Connector", href: "/connector" },

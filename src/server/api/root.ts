@@ -5,7 +5,7 @@ import { z } from "zod";
 import { runChatTurn } from "@/server/agent";
 import { isoDatetime, performWrite, PROPOSAL_KINDS, type ActionWrite } from "@/server/actions";
 import { CONNECTORS, routineWindow } from "@/server/adapters/corsair";
-import { actions, sessionMessages, sessions } from "@/server/db/schema";
+import { actions, memory, sessionMessages, sessions } from "@/server/db/schema";
 import { getLastSync, recordSync } from "@/server/sync/state";
 import { protectedProcedure, router, type Context } from "./trpc";
 
@@ -202,6 +202,19 @@ const chatRouter = router({
           title: input.content.slice(0, 60),
         });
       }
+      // Explicit "remember …" is a direct Memory write: the human typed it,
+      // which is the approval (ADR-0001); no card, no model cooperation.
+      // shortcut: prefix match only, widen when more phrasings matter
+      const remembered = input.content.match(/^remember\s+(.+)/i);
+      const rememberedContent = remembered?.[1].trim();
+      if (rememberedContent) {
+        await ctx.db.insert(memory).values({
+          id: randomUUID(),
+          tenantId: ctx.tenantId,
+          content: rememberedContent,
+          source: "manual",
+        });
+      }
       yield { type: "session" as const, sessionId };
       yield* runChatTurn({
         db: ctx.db,
@@ -378,6 +391,39 @@ const calendarRouter = router({
     }),
 });
 
+const memoryRouter = router({
+  list: protectedProcedure.query(({ ctx }) =>
+    ctx.db
+      .select()
+      .from(memory)
+      .where(eq(memory.tenantId, ctx.tenantId))
+      .orderBy(desc(memory.createdAt)),
+  ),
+
+  update: protectedProcedure
+    .input(z.object({ id: z.string().min(1), content: z.string().trim().min(1).max(4000) }))
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db
+        .update(memory)
+        .set({ content: input.content })
+        .where(and(eq(memory.id, input.id), eq(memory.tenantId, ctx.tenantId)))
+        .returning({ id: memory.id });
+      if (rows.length === 0) throw new TRPCError({ code: "NOT_FOUND" });
+      return rows[0];
+    }),
+
+  delete: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db
+        .delete(memory)
+        .where(and(eq(memory.id, input.id), eq(memory.tenantId, ctx.tenantId)))
+        .returning({ id: memory.id });
+      if (rows.length === 0) throw new TRPCError({ code: "NOT_FOUND" });
+      return rows[0];
+    }),
+});
+
 export const appRouter = router({
   me: protectedProcedure.query(({ ctx }) => ({
     tenantId: ctx.tenantId,
@@ -387,6 +433,7 @@ export const appRouter = router({
   inbox: inboxRouter,
   chat: chatRouter,
   calendar: calendarRouter,
+  memory: memoryRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -48,3 +48,13 @@ export const sessionMessages = pgTable("session_messages", {
   content: text("content").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// Memory: durable facts about the user. source=manual (explicit "remember …")
+// or extracted (agent tool during a turn); the user edits/deletes either.
+export const memory = pgTable("memory", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull(),
+  content: text("content").notNull(),
+  source: text("source").notNull(), // "manual" | "extracted"
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
