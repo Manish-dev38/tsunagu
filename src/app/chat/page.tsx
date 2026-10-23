@@ -68,6 +68,13 @@ export default function ChatPage() {
     },
     onError: (e) => setError(e.message),
   });
+  const refreshMail = api.inbox.refresh.useMutation({
+    onSuccess: () => {
+      setError(null);
+      void utils.inbox.list.invalidate();
+    },
+    onError: (e) => setError(e.message),
+  });
 
   const finishTurn = () => {
     setAskInput(null);
@@ -105,8 +112,8 @@ export default function ChatPage() {
     pendingUser !== null && !rows.some((row) => row.role === "user" && row.content === pendingUser);
 
   return (
-    <div className="flex gap-6">
-      <div className="w-56 shrink-0">
+    <div className="flex h-full gap-6">
+      <div className="w-56 shrink-0 overflow-y-auto">
         <button
           onClick={() => resetView(null)}
           className="mb-3 w-full rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
@@ -130,9 +137,19 @@ export default function ChatPage() {
         </ul>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <h1 className="mb-3 text-xl font-semibold">Chat</h1>
-        <div className="min-h-64 flex-1 space-y-4 overflow-y-auto rounded border border-neutral-200 p-4">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h1 className="text-xl font-semibold">Chat</h1>
+          <button
+            onClick={() => refreshMail.mutate()}
+            disabled={refreshMail.isPending}
+            title="Sync Gmail"
+            className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
+          >
+            {refreshMail.isPending ? "Refreshing…" : "Refresh mail"}
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto rounded border border-neutral-200 p-4">
           {error && <p className="text-sm text-red-600">{error}</p>}
           {!error && rows.length === 0 && !pendingUser && !askInput && (
             <div>

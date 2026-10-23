@@ -18,10 +18,15 @@ describe("router seam: me", () => {
     db = await createTestDb();
   });
 
-  it("returns the tenant id and profile name and email from the session", async () => {
+  it("returns the tenant id and profile name, email and image from the session", async () => {
     const caller = makeCaller(
       {
-        user: { id: "tenant_1", name: "Manish", email: "mani@example.com", image: null },
+        user: {
+          id: "tenant_1",
+          name: "Manish",
+          email: "mani@example.com",
+          image: "https://lh3.googleusercontent.com/avatar.png",
+        },
         expires: "2099-01-01T00:00:00.000Z",
       },
       db,
@@ -30,6 +35,7 @@ describe("router seam: me", () => {
       tenantId: "tenant_1",
       name: "Manish",
       email: "mani@example.com",
+      image: "https://lh3.googleusercontent.com/avatar.png",
     });
   });
 

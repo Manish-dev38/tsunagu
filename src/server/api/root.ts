@@ -489,6 +489,7 @@ export const appRouter = router({
     tenantId: ctx.tenantId,
     name: ctx.session?.user?.name ?? null,
     email: ctx.session?.user?.email ?? null,
+    image: ctx.session?.user?.image ?? null,
   })),
   connectors: connectorsRouter,
   inbox: inboxRouter,

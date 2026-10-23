@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { AccountBlock } from "./account-block";
 import { InboxBadge } from "./inbox-badge";
 import { RoutinePanel } from "./routine-panel";
 import { TRPCProvider } from "@/trpc/provider";
@@ -26,8 +27,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <TRPCProvider>
-          <div className="flex min-h-screen">
-            <aside className="w-48 shrink-0 border-r border-neutral-200 p-4">
+          {/* definite viewport shell: sidebar + routine stay put, main scrolls */}
+          <div className="flex h-screen overflow-hidden">
+            <aside className="flex w-48 shrink-0 flex-col overflow-y-auto border-r border-neutral-200 p-4">
               <div className="mb-6 font-semibold">Tsunagu</div>
               <nav>
                 <ul className="space-y-1 text-sm text-neutral-600">
@@ -45,9 +47,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   ))}
                 </ul>
               </nav>
+              <AccountBlock />
             </aside>
-            <main className="flex-1 p-8">{children}</main>
-            <aside className="hidden w-72 shrink-0 border-l border-neutral-200 p-4 lg:block">
+            <main className="flex-1 overflow-y-auto p-8">{children}</main>
+            <aside className="hidden w-72 shrink-0 overflow-y-auto border-l border-neutral-200 p-4 lg:block">
               <div className="mb-4 text-sm font-semibold text-neutral-500">Routine</div>
               <RoutinePanel />
             </aside>
