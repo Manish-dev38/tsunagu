@@ -18,7 +18,7 @@ describe("router seam: me", () => {
     db = await createTestDb();
   });
 
-  it("returns the tenant id and name from the session", async () => {
+  it("returns the tenant id and profile name and email from the session", async () => {
     const caller = makeCaller(
       {
         user: { id: "tenant_1", name: "Manish", email: "mani@example.com", image: null },
@@ -26,7 +26,11 @@ describe("router seam: me", () => {
       },
       db,
     );
-    await expect(caller.me()).resolves.toEqual({ tenantId: "tenant_1", name: "Manish" });
+    await expect(caller.me()).resolves.toEqual({
+      tenantId: "tenant_1",
+      name: "Manish",
+      email: "mani@example.com",
+    });
   });
 
   it("rejects unauthenticated callers instead of leaking a null tenant", async () => {

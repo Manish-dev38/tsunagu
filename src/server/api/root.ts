@@ -467,10 +467,28 @@ const actionRouter = router({
     }),
 });
 
+const accountRouter = router({
+  // clean exit: Memory + Sessions only — the action log stays as audit trail,
+  // connectors stay connected until disconnected on the Connector screen
+  deleteData: protectedProcedure.mutation(async ({ ctx }) => {
+    const deletedMemory = await ctx.db
+      .delete(memory)
+      .where(eq(memory.tenantId, ctx.tenantId))
+      .returning({ id: memory.id });
+    // session_messages cascade via the FK
+    const deletedSessions = await ctx.db
+      .delete(sessions)
+      .where(eq(sessions.tenantId, ctx.tenantId))
+      .returning({ id: sessions.id });
+    return { memory: deletedMemory.length, sessions: deletedSessions.length };
+  }),
+});
+
 export const appRouter = router({
   me: protectedProcedure.query(({ ctx }) => ({
     tenantId: ctx.tenantId,
     name: ctx.session?.user?.name ?? null,
+    email: ctx.session?.user?.email ?? null,
   })),
   connectors: connectorsRouter,
   inbox: inboxRouter,
@@ -478,6 +496,7 @@ export const appRouter = router({
   calendar: calendarRouter,
   memory: memoryRouter,
   action: actionRouter,
+  account: accountRouter,
 });
 
 export type AppRouter = typeof appRouter;

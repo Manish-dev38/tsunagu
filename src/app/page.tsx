@@ -1,4 +1,5 @@
-import { auth, signIn, signOut } from "@/server/auth";
+import { auth, signIn } from "@/server/auth";
+import { redirect } from "next/navigation";
 import { connection } from "next/server";
 
 // Blocking route: auth() verifies the session JWT (crypto.getRandomValues) per request,
@@ -27,25 +28,6 @@ export default async function Home() {
     );
   }
 
-  const first = session.user.name?.split(" ")[0] ?? "there";
-
-  return (
-    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-6">
-      <h1 className="text-3xl font-semibold">Hello {first}</h1>
-      <button
-        disabled
-        className="cursor-not-allowed rounded border border-neutral-300 px-6 py-2 text-sm text-neutral-400"
-      >
-        Ask AI
-      </button>
-      <form
-        action={async () => {
-          "use server";
-          await signOut();
-        }}
-      >
-        <button className="text-xs text-neutral-500 underline">Sign out</button>
-      </form>
-    </div>
-  );
+  // home is Chat's empty state, not a separate screen (sign-out lives on Account)
+  redirect("/chat");
 }

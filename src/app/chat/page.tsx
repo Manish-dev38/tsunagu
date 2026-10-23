@@ -33,6 +33,7 @@ export default function ChatPage() {
   const [streamText, setStreamText] = useState("");
 
   const utils = api.useUtils();
+  const me = api.me.useQuery();
   const sessions = api.chat.sessions.useQuery();
   const messages = api.chat.messages.useQuery(
     activeId ? { sessionId: activeId } : skipToken,
@@ -134,7 +135,12 @@ export default function ChatPage() {
         <div className="min-h-64 flex-1 space-y-4 overflow-y-auto rounded border border-neutral-200 p-4">
           {error && <p className="text-sm text-red-600">{error}</p>}
           {!error && rows.length === 0 && !pendingUser && !askInput && (
-            <p className="text-sm text-neutral-400">Ask anything about your inbox.</p>
+            <div>
+              <p className="text-lg font-medium">
+                Hello {me.data?.name?.split(" ")[0] ?? "there"}
+              </p>
+              <p className="text-sm text-neutral-400">Ask anything about your inbox.</p>
+            </div>
           )}
           {rows.map((message) => (
             <div key={message.id}>

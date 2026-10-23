@@ -18,7 +18,7 @@ const NAV: { label: string; href?: string; badge?: boolean }[] = [
   { label: "Calendar", href: "/calendar" },
   { label: "Routine" },
   { label: "Connector", href: "/connector" },
-  { label: "Account" },
+  { label: "Account", href: "/account" },
 ];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
