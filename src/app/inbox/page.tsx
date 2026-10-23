@@ -95,8 +95,6 @@ export default function InboxPage() {
     onError: (e) => setError(e.message),
   });
 
-  if (list.isPending) return <p className="text-sm text-neutral-500">Loading…</p>;
-
   if (list.error) {
     return (
       <div>
@@ -218,12 +216,28 @@ export default function InboxPage() {
             <p className="mb-2 text-sm text-red-600">{error}</p>
           ))}
 
-        <p className="mb-2 text-xs text-neutral-400">
-          {list.data.unreadCount} unread · last synced{" "}
-          {list.data.lastSyncedAt ? fmtDateTime(list.data.lastSyncedAt) : "never"}
-        </p>
+        {list.data && (
+          <p className="mb-2 text-xs text-neutral-400">
+            {list.data.unreadCount} unread · last synced{" "}
+            {list.data.lastSyncedAt ? fmtDateTime(list.data.lastSyncedAt) : "never"}
+          </p>
+        )}
 
-        {list.data.messages.length === 0 ? (
+        {!list.data ? (
+          // first-ever visit: shell already painted, show list-shaped skeletons
+          <div role="status">
+            <span className="sr-only">Loading mail…</span>
+            <ul aria-hidden="true">
+              {Array.from({ length: 6 }, (_, i) => (
+                <li key={i} className="border-b border-neutral-200 px-2 py-3">
+                  <div className="mb-2 h-3 w-1/3 animate-pulse rounded bg-neutral-200" />
+                  <div className="mb-2 h-3 w-2/3 animate-pulse rounded bg-neutral-200" />
+                  <div className="h-3 w-1/2 animate-pulse rounded bg-neutral-200" />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : list.data.messages.length === 0 ? (
           <p className="text-sm text-neutral-500">
             No mail yet. Connect Gmail and hit Refresh to sync.
           </p>

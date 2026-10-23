@@ -1,4 +1,4 @@
-import type { Connector, CorsairPort } from "@/server/adapters/corsair";
+import type { Connector } from "@/server/adapters/corsair";
 import type { Db } from "@/server/db";
 import { syncState } from "@/server/db/schema";
 import { recordSync } from "./state";
@@ -8,15 +8,10 @@ export interface SyncProvider {
   sync(tenantId: string): Promise<{ syncedAt: string }>;
 }
 
-const DEFAULT_INTERVAL_MS = 5 * 60_000;
-
 export class Poller {
-  private timer: ReturnType<typeof setInterval> | undefined;
-
   constructor(
     private db: Db,
     private providers: SyncProvider[],
-    private intervalMs: number = DEFAULT_INTERVAL_MS,
   ) {}
 
   async pollTenant(tenantId: string): Promise<void> {
@@ -43,27 +38,4 @@ export class Poller {
       }
     }
   }
-
-  start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => void this.pollAll(), this.intervalMs);
-    this.timer.unref?.();
-  }
-
-  stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = undefined;
-  }
-}
-
-let running: Poller | undefined;
-
-// Interval polling assumes one long-lived Node process (next start), not
-// serverless cold starts; each connector is one SyncProvider entry.
-export function ensurePolling(db: Db, corsair: CorsairPort): void {
-  running ??= new Poller(db, [
-    { name: "gmail", sync: (tenantId) => corsair.syncGmail(tenantId) },
-    { name: "googlecalendar", sync: (tenantId) => corsair.syncCalendar(tenantId) },
-  ]);
-  running.start();
 }

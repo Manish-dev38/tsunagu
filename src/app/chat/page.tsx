@@ -44,6 +44,8 @@ export default function ChatPage() {
     onSuccess: (result) => {
       setError(null);
       void utils.chat.proposals.invalidate();
+      // 5-min staleTime would otherwise hide the new action row on /action
+      void utils.action.list.invalidate();
       // refresh the view the write actually feeds
       if (result.kind.startsWith("calendar.")) {
         void utils.calendar.routine.invalidate();

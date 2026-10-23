@@ -38,9 +38,7 @@ function dayHeader(event: { start: { dateTime?: string; date?: string } }) {
 }
 
 export function RoutinePanel() {
-  const { data, isPending, isError } = api.calendar.routine.useQuery(undefined, {
-    refetchInterval: 60_000,
-  });
+  const { data, isPending, isError } = api.calendar.routine.useQuery(undefined);
 
   if (isPending) return <p className="text-sm text-neutral-400">Loading…</p>;
   if (isError) return <p className="text-sm text-neutral-400">Couldn’t load schedule.</p>;

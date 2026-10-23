@@ -56,9 +56,8 @@ export default function CalendarPage() {
   const [time, setTime] = useState("10:00");
 
   useEffect(() => {
-    // deferred out of the effect body: react-hooks/set-state-in-effect
-    const t = setTimeout(() => setAnchor(new Date()), 0);
-    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot clock init on mount; reading the clock during render would hydration-mismatch the prerendered grid
+    setAnchor(new Date());
   }, []);
 
   const base = anchor ?? new Date(0);
