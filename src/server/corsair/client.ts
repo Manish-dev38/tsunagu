@@ -21,6 +21,8 @@ import {
   type RescheduleEventInput,
   type SendEmailInput,
   type SyncResult,
+  extractHtml,
+  normalizeInternalDate,
 } from "@/server/adapters/corsair";
 
 let pool: Pool | undefined;
@@ -210,7 +212,10 @@ export class RealCorsair implements CorsairPort {
     const row = (await getClient()
       .withTenant(tenantId)
       .gmail.db.messages.findByEntityId(messageId)) as MessageEntityRow | null;
-    return row ? toCachedMessage(row) : null;
+    // original HTML rides only on the detail query — list rows stay snippet-sized
+    return row
+      ? { ...toCachedMessage(row), html: extractHtml(row.data.payload, row.data.body) }
+      : null;
   }
 
   async sendEmail(tenantId: string, input: SendEmailInput) {
@@ -266,6 +271,7 @@ function toCachedMessage(row: {
     to?: string | null;
     body?: string | null;
     internalDate?: string | null;
+    payload?: unknown;
   };
 }): CachedMessage {
   return {
@@ -277,7 +283,7 @@ function toCachedMessage(row: {
     from: row.data.from ?? "",
     to: row.data.to ?? "",
     body: row.data.body ?? "",
-    internalDate: row.data.internalDate ?? "",
+    internalDate: normalizeInternalDate(row.data.internalDate ?? ""),
   };
 }
 

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { appRouter } from "@/server/api/root";
-import { CorsairFake, type CachedMessage } from "@/server/adapters/corsair";
+import { CorsairFake, type CachedMessage, extractHtml, normalizeInternalDate } from "@/server/adapters/corsair";
 import { LlmFake } from "@/server/adapters/llm";
 import { type Db, createTestDb } from "@/server/db";
 import { Poller } from "@/server/sync/poller";
@@ -225,10 +225,84 @@ describe("router seam: inbox", () => {
     expect(polled).not.toContain("tenant_p1");
   });
 
+  it("message exposes original html for the reader, and stays plain for text mail", async () => {
+    const corsair = new CorsairFake();
+    const html = '<div style="color:#e53e3e"><b>Hi Manish</b></div>';
+    corsair.seedLiveMailbox("tenant_rich", [
+      msg("h1", { html }),
+      msg("h2", { body: "just plain text" }),
+    ]);
+    const caller = makeCaller("tenant_rich", db, corsair);
+    await caller.inbox.refresh();
+
+    const rich = await caller.inbox.message({ id: "h1" });
+    expect(rich?.html).toBe(html);
+    const plain = await caller.inbox.message({ id: "h2" });
+    expect(plain?.html ?? "").toBe("");
+  });
+
   it("rejects unauthenticated callers on every procedure", async () => {
     const caller = makeCaller(null, db, new CorsairFake());
     await expect(caller.inbox.list()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await expect(caller.inbox.message({ id: "x" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await expect(caller.inbox.refresh()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+});
+
+describe("extractHtml", () => {
+  const html = "<div><b>Hi Manish</b></div>";
+
+  it("decodes a base64url html part from a multipart payload", () => {
+    const payload = {
+      mimeType: "multipart/alternative",
+      parts: [
+        { mimeType: "text/plain", body: { data: Buffer.from("plain").toString("base64url") } },
+        { mimeType: "text/html", body: { data: Buffer.from(html).toString("base64url") } },
+      ],
+    };
+    expect(extractHtml(payload)).toBe(html);
+  });
+
+  it("finds html nested deeper in multiparts", () => {
+    const payload = {
+      mimeType: "multipart/mixed",
+      parts: [
+        {
+          mimeType: "multipart/alternative",
+          parts: [{ mimeType: "text/html", body: { data: Buffer.from(html).toString("base64url") } }],
+        },
+      ],
+    };
+    expect(extractHtml(payload)).toBe(html);
+  });
+
+  it("returns html already stored decoded", () => {
+    expect(extractHtml({ mimeType: "text/html", body: { data: html } })).toBe(html);
+  });
+
+  it("falls back to the extracted body when it is html and the payload has none", () => {
+    expect(extractHtml(undefined, html)).toBe(html);
+    expect(extractHtml({ mimeType: "text/plain" }, html)).toBe(html);
+  });
+
+  it("returns empty for plain-text mail and garbage", () => {
+    expect(extractHtml(undefined, "hello world")).toBe("");
+    expect(extractHtml({ mimeType: "text/plain", body: { data: "aGk=" } }, "hi")).toBe("");
+    expect(extractHtml(null, null)).toBe("");
+  });
+});
+
+describe("normalizeInternalDate", () => {
+  it("converts gmail epoch-ms strings to ISO", () => {
+    expect(normalizeInternalDate("1792726960000")).toBe(new Date(1792726960000).toISOString());
+  });
+
+  it("passes ISO through untouched", () => {
+    expect(normalizeInternalDate("2026-01-01T10:00:00.000Z")).toBe("2026-01-01T10:00:00.000Z");
+  });
+
+  it("leaves unusable values alone instead of throwing", () => {
+    expect(normalizeInternalDate("")).toBe("");
+    expect(normalizeInternalDate("not-a-date")).toBe("not-a-date");
   });
 });

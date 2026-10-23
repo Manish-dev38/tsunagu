@@ -4,6 +4,23 @@ import { useState } from "react";
 import { isUnread, type CachedMessage } from "@/server/adapters/corsair";
 import { api } from "@/trpc/provider";
 
+function pad(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+// fixed DD/MM/YY (+ time) — toLocaleDateString gave locale-dependent output
+function fmtDate(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`;
+}
+
+function fmtDateTime(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${fmtDate(iso)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export default function InboxPage() {
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [query, setQuery] = useState("");
@@ -93,7 +110,7 @@ export default function InboxPage() {
 
   return (
     <div className="flex gap-8">
-      <div className="min-w-0 flex-1">
+      <div className={openId ? "w-80 shrink-0" : "min-w-0 flex-1"}>
         <div className="mb-4 flex items-center justify-between">
           <h1 className="text-xl font-semibold">Inbox</h1>
           <div className="flex gap-2">
@@ -203,7 +220,7 @@ export default function InboxPage() {
 
         <p className="mb-2 text-xs text-neutral-400">
           {list.data.unreadCount} unread · last synced{" "}
-          {list.data.lastSyncedAt ? new Date(list.data.lastSyncedAt).toLocaleString() : "never"}
+          {list.data.lastSyncedAt ? fmtDateTime(list.data.lastSyncedAt) : "never"}
         </p>
 
         {list.data.messages.length === 0 ? (
@@ -230,7 +247,7 @@ export default function InboxPage() {
                     </span>
                     <span className="shrink-0 text-xs text-neutral-400">
                       {m.labelIds.includes("STARRED") ? "★ " : ""}
-                      {m.internalDate ? new Date(m.internalDate).toLocaleDateString() : ""}
+                      {fmtDate(m.internalDate)}
                     </span>
                   </div>
                   <div
@@ -249,7 +266,7 @@ export default function InboxPage() {
       </div>
 
       {openId && (
-        <div className="w-96 shrink-0 border-l border-neutral-200 pl-6">
+        <div className="min-w-0 flex-1 border-l border-neutral-200 pl-6">
           {message.isPending ? (
             <p className="text-sm text-neutral-500">Loading…</p>
           ) : detail ? (
@@ -323,10 +340,20 @@ function MessageDetail({
       <p className="mb-1 text-xs text-neutral-500">
         From {detail.from} · to {detail.to}
       </p>
-      <p className="mb-3 text-xs text-neutral-400">
-        {detail.internalDate ? new Date(detail.internalDate).toLocaleString() : ""}
-      </p>
-      <div className="whitespace-pre-wrap text-sm text-neutral-800">{detail.body}</div>
+      <p className="mb-3 text-xs text-neutral-400">{fmtDateTime(detail.internalDate)}</p>
+      {detail.html ? (
+        <div className="overflow-hidden rounded border border-neutral-200 bg-white p-4">
+          <iframe
+            title="Email body"
+            // no scripts, no same-origin; popups may escape so mail links open as normal tabs
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
+            srcDoc={`<!doctype html><html><head><meta charset="utf-8"><base target="_blank"></head><body style="margin:0">${detail.html}</body></html>`}
+            className="h-[70vh] w-full border-0 bg-white"
+          />
+        </div>
+      ) : (
+        <div className="whitespace-pre-wrap text-sm text-neutral-800">{detail.body}</div>
+      )}
     </div>
   );
 }

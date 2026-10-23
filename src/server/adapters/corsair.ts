@@ -16,6 +16,45 @@ export interface CachedMessage {
   to: string;
   body: string;
   internalDate: string;
+  // original HTML for the reader; omitted on list rows (snippet view only)
+  html?: string;
+}
+
+export function normalizeInternalDate(raw: string): string {
+  // Gmail hands out epoch milliseconds as a string, which Date() rejects as-is
+  if (!/^\d+$/.test(raw)) return raw;
+  const d = new Date(Number(raw));
+  return Number.isNaN(d.getTime()) ? raw : d.toISOString();
+}
+
+type GmailPart = { mimeType?: string; body?: { data?: string }; parts?: GmailPart[] };
+
+function findHtmlPart(value: unknown): GmailPart | null {
+  if (!value || typeof value !== "object") return null;
+  const part = value as GmailPart;
+  if (part.mimeType === "text/html" && part.body?.data) return part;
+  for (const child of part.parts ?? []) {
+    const hit = findHtmlPart(child);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+export function extractHtml(payload: unknown, body?: string | null): string {
+  const data = findHtmlPart(payload)?.body?.data;
+  if (data) {
+    // Gmail's body.data is base64url; rows synced already-decoded contain markup
+    if (data.includes("<")) return data;
+    try {
+      const bin = atob(data.replace(/-/g, "+").replace(/_/g, "/"));
+      return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+    } catch {
+      return "";
+    }
+  }
+  // extractors sometimes only keep `body`, and it may itself be HTML
+  if (typeof body === "string" && /^\s*<[a-z!/]/i.test(body)) return body;
+  return "";
 }
 
 export interface ListMessagesOptions {

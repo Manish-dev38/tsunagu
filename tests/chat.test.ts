@@ -91,7 +91,10 @@ describe("router seam: chat sessions, streaming, agent reads", () => {
       { text: "The meeting is at 10am" },
     );
     const corsair = new CorsairFake();
-    corsair.seedLiveMailbox("tenant_loop", [msg("m1"), msg("m2")]);
+    corsair.seedLiveMailbox("tenant_loop", [
+      msg("m1", { html: '<div class="rich">RICH_HTML_MARKER</div>' }),
+      msg("m2"),
+    ]);
     const caller = makeCaller("tenant_loop", db, corsair, llm);
     await caller.inbox.refresh();
 
@@ -103,6 +106,8 @@ describe("router seam: chat sessions, streaming, agent reads", () => {
     expect(firstToolResult).toContain("Subject m1");
     const secondToolResult = JSON.stringify(llm.requests[2].messages);
     expect(secondToolResult).toContain("Body of m1");
+    // the reader's html never rides into the model context
+    expect(secondToolResult).not.toContain("RICH_HTML_MARKER");
   });
 
   it("digests the inbox when asked to summarize it", async () => {

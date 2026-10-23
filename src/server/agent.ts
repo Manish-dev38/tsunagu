@@ -255,7 +255,11 @@ async function executeTool(
     if (name === "read_email") {
       const id = typeof args.id === "string" ? args.id : "";
       const message = id ? await corsair.getCachedMessage(tenantId, id) : null;
-      return JSON.stringify(message ?? { error: `no email with id ${id}` });
+      if (!message) return JSON.stringify({ error: `no email with id ${id}` });
+      // the reader's original html stays out of the model context; `body` carries the text
+      const readable = { ...message };
+      delete readable.html;
+      return JSON.stringify(readable);
     }
     if (name === "propose_send_email") {
       if (
