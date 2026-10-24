@@ -309,7 +309,7 @@ export function ProposalCard({
           <button
             onClick={save}
             disabled={!canSave}
-            className="rounded bg-neutral-900 px-3 py-1 text-xs text-white disabled:opacity-40"
+            className="rounded bg-neutral-900 px-3 py-1 text-xs text-white dark:text-neutral-950 disabled:opacity-40"
           >
             Save
           </button>
@@ -370,7 +370,7 @@ export function ProposalCard({
         <button
           onClick={onApprove}
           disabled={busy}
-          className="rounded bg-neutral-900 px-3 py-1 text-xs text-white disabled:opacity-40"
+          className="rounded bg-neutral-900 px-3 py-1 text-xs text-white dark:text-neutral-950 disabled:opacity-40"
         >
           Approve
         </button>

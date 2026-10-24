@@ -20,7 +20,7 @@ export default async function Home() {
             await signIn("google");
           }}
         >
-          <button className="rounded bg-neutral-900 px-4 py-2 text-sm text-white">
+          <button className="rounded bg-neutral-900 px-4 py-2 text-sm text-white dark:text-neutral-950">
             Sign in with Google
           </button>
         </form>

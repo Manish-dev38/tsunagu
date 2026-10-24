@@ -120,7 +120,7 @@ export default function InboxPage() {
               {refresh.isPending ? "Refreshing…" : "Refresh"}
             </button>
             <button
-              className="rounded bg-neutral-900 px-3 py-1 text-sm text-white disabled:opacity-50"
+              className="rounded bg-neutral-900 px-3 py-1 text-sm text-white dark:text-neutral-950 disabled:opacity-50"
               disabled={composing}
               onClick={() => setComposing(true)}
             >
@@ -159,7 +159,7 @@ export default function InboxPage() {
             <div className="flex gap-2">
               <button
                 type="submit"
-                className="rounded bg-neutral-900 px-3 py-1 text-sm text-white disabled:opacity-50"
+                className="rounded bg-neutral-900 px-3 py-1 text-sm text-white dark:text-neutral-950 disabled:opacity-50"
                 disabled={send.isPending || !to.trim()}
               >
                 {send.isPending ? "Sending…" : "Send"}
@@ -189,7 +189,7 @@ export default function InboxPage() {
                 key={f}
                 className={
                   filter === f
-                    ? "rounded bg-neutral-900 px-3 py-1 text-white"
+                    ? "rounded bg-neutral-900 px-3 py-1 text-white dark:text-neutral-950"
                     : "px-3 py-1 hover:bg-neutral-100"
                 }
                 onClick={() => setFilter(f)}

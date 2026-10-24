@@ -65,7 +65,7 @@ export default function MemoryPage() {
                   <button
                     onClick={() => update.mutate({ id: item.id, content: draft })}
                     disabled={!draft.trim() || update.isPending}
-                    className="rounded bg-neutral-900 px-2 py-1 text-xs text-white disabled:opacity-50"
+                    className="rounded bg-neutral-900 px-2 py-1 text-xs text-white dark:text-neutral-950 disabled:opacity-50"
                   >
                     Save
                   </button>

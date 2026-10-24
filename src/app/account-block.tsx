@@ -12,7 +12,7 @@ export function AccountBlock() {
 
   return (
     <Link
-      className="mt-auto flex flex-col items-center gap-1.5 rounded px-2 py-2 text-center hover:bg-neutral-100"
+      className="flex flex-col items-center gap-1.5 rounded px-2 py-2 text-center hover:bg-neutral-100"
       href="/account"
     >
       {image ? (

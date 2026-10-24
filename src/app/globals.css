@@ -1,8 +1,11 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  color-scheme: light;
 }
 
 @theme inline {
@@ -12,11 +15,23 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Class-driven theme (System/Light/Dark toggle): the pre-paint script on <html>
+   sets .dark, and overriding the palette vars re-tints every neutral-* utility
+   app-wide without touching components. Neutral gray, never blue-tinted. */
+.dark {
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --color-neutral-50: #141414;
+  --color-neutral-100: #1c1c1c;
+  --color-neutral-200: #2b2b2b;
+  --color-neutral-300: #444444;
+  --color-neutral-400: #737373;
+  --color-neutral-500: #969696;
+  --color-neutral-600: #b0b0b0;
+  --color-neutral-700: #c9c9c9;
+  --color-neutral-800: #dedede;
+  --color-neutral-900: #f0f0f0;
 }
 
 body {

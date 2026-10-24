@@ -212,7 +212,7 @@ export default function ChatPage() {
           <button
             type="submit"
             disabled={askInput !== null || !input.trim()}
-            className="rounded bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40"
+            className="rounded bg-neutral-900 px-4 py-2 text-sm text-white dark:text-neutral-950 disabled:opacity-40"
           >
             Send
           </button>

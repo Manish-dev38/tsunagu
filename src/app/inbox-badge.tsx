@@ -7,7 +7,7 @@ export function InboxBadge() {
   const count = data?.unreadCount ?? 0;
   if (count === 0) return null;
   return (
-    <span className="ml-2 rounded-full bg-neutral-900 px-1.5 py-0.5 text-xs text-white">
+    <span className="ml-2 rounded-full bg-neutral-900 px-1.5 py-0.5 text-xs text-white dark:text-neutral-950">
       {count}
     </span>
   );

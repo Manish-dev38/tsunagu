@@ -64,7 +64,7 @@ export default function ConnectorPage() {
                   className={
                     isConnected
                       ? "rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100"
-                      : "rounded bg-neutral-900 px-3 py-1 text-sm text-white hover:bg-neutral-700"
+                      : "rounded bg-neutral-900 px-3 py-1 text-sm text-white dark:text-neutral-950 hover:bg-neutral-700"
                   }
                   disabled={connect.isPending || disconnect.isPending}
                   onClick={() => onToggle(connector, isConnected)}

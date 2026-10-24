@@ -147,7 +147,7 @@ export default function CalendarPage() {
           {(["month", "week"] as const).map((m) => (
             <button
               key={m}
-              className={`px-3 py-1 capitalize ${mode === m ? "bg-neutral-900 text-white" : "hover:bg-neutral-100"}`}
+              className={`px-3 py-1 capitalize ${mode === m ? "bg-neutral-900 text-white dark:text-neutral-950" : "hover:bg-neutral-100"}`}
               onClick={() => setMode(m)}
             >
               {m}
@@ -187,7 +187,7 @@ export default function CalendarPage() {
           />
           <button
             type="submit"
-            className="rounded bg-neutral-900 px-3 py-1 text-sm text-white disabled:opacity-50"
+            className="rounded bg-neutral-900 px-3 py-1 text-sm text-white dark:text-neutral-950 disabled:opacity-50"
             disabled={createEvent.isPending || !summary.trim()}
           >
             Add
@@ -230,7 +230,7 @@ export default function CalendarPage() {
                 <span
                   className={`text-xs ${
                     key === todayKey
-                      ? "rounded-full bg-neutral-900 px-1.5 py-0.5 font-semibold text-white"
+                      ? "rounded-full bg-neutral-900 px-1.5 py-0.5 font-semibold text-white dark:text-neutral-950"
                       : inMonth
                         ? "font-medium text-neutral-700"
                         : "text-neutral-300"
