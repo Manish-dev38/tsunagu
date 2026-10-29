@@ -1,6 +1,9 @@
 "use client";
 
+import { Sun } from "lucide-react";
 import { useEffect, useState } from "react";
+import { IconButton } from "@/components/ui/icon-button";
+import { Segmented } from "@/components/ui/segmented";
 
 const STORAGE_KEY = "tsunagu-theme";
 const MODES = ["system", "light", "dark"] as const;
@@ -16,6 +19,12 @@ function apply(mode: Mode) {
     (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.classList.toggle("dark", dark);
 }
+
+const OPTIONS = [
+  { value: "system" as const, label: "System" },
+  { value: "light" as const, label: "Light" },
+  { value: "dark" as const, label: "Dark" },
+];
 
 export function ThemeToggle() {
   const [mode, setMode] = useState<Mode>("system");
@@ -39,24 +48,27 @@ export function ThemeToggle() {
     apply(next);
   };
 
+  // compact control inside the collapsed rail: system -> light -> dark -> system
+  const cycle = () => choose(MODES[(MODES.indexOf(mode) + 1) % MODES.length]);
+
   return (
-    <div aria-label="Theme" className="flex rounded border border-neutral-300 text-xs" role="radiogroup">
-      {MODES.map((option) => (
-        <button
-          key={option}
-          aria-checked={mode === option}
-          className={`flex-1 px-1 py-1 capitalize ${
-            mode === option
-              ? "bg-neutral-900 text-white dark:text-neutral-950"
-              : "hover:bg-neutral-100"
-          }`}
-          onClick={() => choose(option)}
-          role="radio"
-          type="button"
-        >
-          {option}
-        </button>
-      ))}
-    </div>
+    <>
+      <Segmented
+        label="Theme"
+        className="theme-long"
+        options={OPTIONS}
+        value={mode}
+        onChange={choose}
+      />
+      <IconButton
+        className="theme-icon"
+        variant="chrome"
+        aria-label="Cycle theme"
+        title={`Theme: ${mode}, click to switch`}
+        onClick={cycle}
+      >
+        <Sun />
+      </IconButton>
+    </>
   );
 }

@@ -1,29 +1,39 @@
 "use client";
 
 import Link from "next/link";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { api } from "@/trpc/provider";
+
+// "Manish Kumar" -> "MK", one word -> "M", else the email's first letter
+function initials(name: string | null, email: string | null) {
+  const words = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (email ?? "?").slice(0, 1).toUpperCase();
+}
 
 export function AccountBlock() {
   const me = api.me.useQuery(undefined, { retry: false });
   if (me.isPending || me.isError) return null;
 
   const { name, email, image } = me.data;
-  const initial = (name ?? email ?? "?").trim().charAt(0).toUpperCase() || "?";
 
   return (
     <Link
-      className="flex flex-col items-center gap-1.5 rounded px-2 py-2 text-center hover:bg-neutral-100"
+      className="account-block"
       href="/account"
+      title={[name, email].filter(Boolean).join(", ") || "Account"}
     >
-      {image ? (
-        // eslint-disable-next-line @next/next/no-img-element -- Google avatar URL, not a route image
-        <img alt="" className="h-10 w-10 rounded-full object-cover" src={image} />
-      ) : (
-        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-neutral-200 text-sm font-semibold text-neutral-600">
-          {initial}
-        </span>
-      )}
-      <span className="w-full truncate text-xs text-neutral-600">{email}</span>
+      <Avatar className="size-9">
+        {image && <AvatarImage src={image} alt="" />}
+        <AvatarFallback className="font-sans text-[13px] font-bold text-foreground">
+          {initials(name, email)}
+        </AvatarFallback>
+      </Avatar>
+      <span className="account-meta">
+        {name && <span className="name">{name}{" "}</span>}
+        {email && <span className="email">{email}</span>}
+      </span>
     </Link>
   );
 }

@@ -212,7 +212,7 @@ export class RealCorsair implements CorsairPort {
     const row = (await getClient()
       .withTenant(tenantId)
       .gmail.db.messages.findByEntityId(messageId)) as MessageEntityRow | null;
-    // original HTML rides only on the detail query — list rows stay snippet-sized
+    // original HTML rides only on the detail query; list rows stay snippet-sized
     return row
       ? { ...toCachedMessage(row), html: extractHtml(row.data.payload, row.data.body) }
       : null;

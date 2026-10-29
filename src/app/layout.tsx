@@ -1,10 +1,8 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { AccountBlock } from "./account-block";
-import { InboxBadge } from "./inbox-badge";
-import { RoutinePanel } from "./routine-panel";
-import { ThemeToggle } from "./theme-toggle";
+import { Backdrop } from "@/components/backdrop";
+import { ToastProvider } from "@/components/ui/toast";
 import { TRPCProvider } from "@/trpc/provider";
+import { Shell } from "./shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,60 +10,26 @@ export const metadata: Metadata = {
   description: "AI-native Gmail and Calendar",
 };
 
-const NAV: { label: string; href?: string; badge?: boolean }[] = [
-  { label: "Chat", href: "/chat" },
-  { label: "Action", href: "/action" },
-  { label: "Inbox", href: "/inbox", badge: true },
-  { label: "Memory", href: "/memory" },
-  { label: "Calendar", href: "/calendar" },
-  { label: "Routine" },
-  { label: "Connector", href: "/connector" },
-  { label: "Account", href: "/account" },
-];
-
-// Applies the stored theme before first paint so there is no light-flash;
-// static trusted code, no interpolated input. localStorage is unavailable on
-// the server, hence the try/catch and class-on-<html> (suppressHydrationWarning).
-const THEME_INIT =
-  'try{var m=localStorage.getItem("tsunagu-theme");var d=m==="dark"||((!m||m==="system")&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",d)}catch(e){}';
+// Applies the stored theme and sidebar state before first paint so nothing
+// flashes; static trusted code, no interpolated input. localStorage is
+// unavailable on the server, hence the try/catch and classes-on-<html>
+// (suppressHydrationWarning). React mirrors both states after mount.
+const INIT =
+  'try{var m=localStorage.getItem("tsunagu-theme");var d=m==="dark"||((!m||m==="system")&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",d)}catch(e){}' +
+  'try{if(localStorage.getItem("tsunagu-sidebar-collapsed")==="true")document.documentElement.classList.add("sidebar-collapsed")}catch(e){}';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
+        <script dangerouslySetInnerHTML={{ __html: INIT }} />
+        <div className="backdrop">
+          <Backdrop />
+        </div>
         <TRPCProvider>
-          {/* definite viewport shell: sidebar + routine stay put, main scrolls */}
-          <div className="flex h-screen overflow-hidden">
-            <aside className="flex w-48 shrink-0 flex-col overflow-y-auto border-r border-neutral-200 p-4">
-              <div className="mb-6 font-semibold">Tsunagu</div>
-              <nav>
-                <ul className="space-y-1 text-sm text-neutral-600">
-                  {NAV.map((item) => (
-                    <li key={item.label}>
-                      {item.href ? (
-                        <Link className="block rounded px-2 py-1 hover:bg-neutral-100" href={item.href}>
-                          {item.label}
-                          {item.badge && <InboxBadge />}
-                        </Link>
-                      ) : (
-                        <span className="block px-2 py-1">{item.label}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </nav>
-              <div className="mt-auto space-y-2">
-                <ThemeToggle />
-                <AccountBlock />
-              </div>
-            </aside>
-            <main className="flex-1 overflow-y-auto p-8">{children}</main>
-            <aside className="hidden w-72 shrink-0 overflow-y-auto border-l border-neutral-200 p-4 lg:block">
-              <div className="mb-4 text-sm font-semibold text-neutral-500">Routine</div>
-              <RoutinePanel />
-            </aside>
-          </div>
+          <ToastProvider>
+            <Shell>{children}</Shell>
+          </ToastProvider>
         </TRPCProvider>
       </body>
     </html>

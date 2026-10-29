@@ -468,7 +468,7 @@ const actionRouter = router({
 });
 
 const accountRouter = router({
-  // clean exit: Memory + Sessions only — the action log stays as audit trail,
+  // clean exit: Memory + Sessions only; the action log stays as audit trail,
   // connectors stay connected until disconnected on the Connector screen
   deleteData: protectedProcedure.mutation(async ({ ctx }) => {
     const deletedMemory = await ctx.db
