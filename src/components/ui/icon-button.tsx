@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
  * Give it an aria-label.
  */
 const iconButtonVariants = cva(
-  "inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors duration-150 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg:not([class*='size-'])]:size-4",
+  "inline-grid size-9 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
