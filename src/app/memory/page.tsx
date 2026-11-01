@@ -1,108 +1,145 @@
 "use client";
 
-import { useState } from "react";
+import { Pencil, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { IconButton } from "@/components/ui/icon-button";
+import { inputClass } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 import { api } from "@/trpc/provider";
 
 export default function MemoryPage() {
-  const [error, setError] = useState<string | null>(null);
+  const utils = api.useUtils();
+  const toast = useToast();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const list = api.memory.list.useQuery();
-  const utils = api.useUtils();
+  const list = api.memory.list.useQuery(undefined, { staleTime: 0 });
+
+  // read failures surface as toasts too (Q3=A), once per new error
+  useEffect(() => {
+    if (list.error) toast(list.error.message, { tone: "danger" });
+  }, [list.error, toast]);
 
   const update = api.memory.update.useMutation({
     onSuccess: () => {
-      setError(null);
       setEditingId(null);
+      toast("Memory saved");
       void utils.memory.list.invalidate();
     },
-    onError: (e) => setError(e.message),
+    onError: (e) => toast(e.message, { tone: "danger" }),
   });
 
   const remove = api.memory.delete.useMutation({
     onSuccess: () => {
-      setError(null);
+      setDeletingId(null);
+      toast("Memory deleted");
       void utils.memory.list.invalidate();
     },
-    onError: (e) => setError(e.message),
+    onError: (e) => toast(e.message, { tone: "danger" }),
   });
 
-  if (list.isPending) return <p className="text-sm text-neutral-500">Loading…</p>;
-  if (list.error)
-    return <p className="text-sm text-red-600">Couldn&apos;t load memory: {list.error.message}</p>;
+  const deleting = list.data?.find((item) => item.id === deletingId);
 
   return (
-    <div className="max-w-2xl space-y-4">
-      <h1 className="text-xl font-semibold">Memory</h1>
-      <p className="text-sm text-neutral-500">
-        Facts the assistant knows about you. Say &quot;remember …&quot; in Chat to add one.
+    <div>
+      <h1 className="page-title">Memory</h1>
+      <p className="page-lead">
+        Facts the assistant knows about you. Say{" "}
+        <span className="font-mono text-[12.5px]">&quot;remember ...&quot;</span> in Chat to add one.
+        Extracted facts are pulled from your mail and need no manual entry.
       </p>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {list.data && list.data.length === 0 && (
-        <p className="text-sm text-neutral-500">No memories yet.</p>
-      )}
-      <ul className="space-y-3">
+
+      {list.isPending && <p className="small muted">Loading…</p>}
+      {list.data?.length === 0 && <p className="small muted">No memories yet.</p>}
+
+      <div className="memory-grid">
         {list.data?.map((item) => (
-          <li key={item.id} className="rounded border border-neutral-200 p-3">
-            <span
-              className={`mb-2 inline-block rounded px-1.5 py-0.5 text-xs ${
-                item.source === "manual" ? "bg-neutral-100 text-neutral-600" : "bg-blue-50 text-blue-700"
-              }`}
-            >
+          <article key={item.id} className="card-chai p-4 stack memory-card">
+            <span className={item.source === "manual" ? "chip" : "chip chip-special"}>
+              {item.source !== "manual" && <span className="dot" aria-hidden="true" />}
               {item.source === "manual" ? "Manual" : "Extracted"}
             </span>
+
             {editingId === item.id ? (
-              <div className="space-y-2">
+              <>
                 <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
+                  className={inputClass + " textarea"}
                   rows={3}
                   aria-label="Memory content"
-                  className="w-full rounded border border-neutral-300 p-2 text-sm"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  autoFocus
                 />
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => update.mutate({ id: item.id, content: draft })}
+                <div className="row">
+                  <Button
+                    variant="soft"
+                    size="sm"
+                    className="h-[26px] px-[10px] text-[12px]"
                     disabled={!draft.trim() || update.isPending}
-                    className="rounded bg-neutral-900 px-2 py-1 text-xs text-white dark:text-neutral-950 disabled:opacity-50"
+                    onClick={() => update.mutate({ id: item.id, content: draft })}
                   >
                     Save
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-[26px] px-[10px] text-[12px]"
+                    disabled={update.isPending}
                     onClick={() => setEditingId(null)}
-                    className="rounded border border-neutral-300 px-2 py-1 text-xs"
                   >
                     Cancel
-                  </button>
+                  </Button>
                 </div>
-              </div>
+              </>
             ) : (
-              <div className="space-y-2">
-                <p className="text-sm">{item.content}</p>
-                <div className="flex gap-2">
-                  <button
+              <>
+                <p className="text-[13.5px] [overflow-wrap:anywhere]">{item.content}</p>
+                <div className="memory-actions">
+                  <IconButton
+                    variant="ghost"
+                    className="size-[26px] text-muted-foreground"
+                    aria-label={`Edit memory: ${item.content}`}
+                    title="Edit memory"
                     onClick={() => {
                       setEditingId(item.id);
                       setDraft(item.content);
                     }}
-                    className="rounded border border-neutral-300 px-2 py-1 text-xs"
                   >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => remove.mutate({ id: item.id })}
-                    disabled={remove.isPending}
-                    className="rounded border border-neutral-300 px-2 py-1 text-xs text-red-600 disabled:opacity-50"
+                    <Pencil />
+                  </IconButton>
+                  <IconButton
+                    variant="ghost"
+                    className="size-[26px] text-muted-foreground"
+                    aria-label={`Delete memory: ${item.content}`}
+                    title="Delete memory"
+                    onClick={() => setDeletingId(item.id)}
                   >
-                    Delete
-                  </button>
+                    <Trash2 />
+                  </IconButton>
                 </div>
-              </div>
+              </>
             )}
-          </li>
+          </article>
         ))}
-      </ul>
+      </div>
+
+      <ConfirmDialog
+        open={deletingId !== null}
+        title="Delete this memory?"
+        confirmLabel="Delete memory"
+        busyLabel="Deleting"
+        tone="danger"
+        busy={remove.isPending}
+        onConfirm={() => {
+          if (deletingId) remove.mutate({ id: deletingId });
+        }}
+        onCancel={() => setDeletingId(null)}
+      >
+        {deleting?.content ?? "This fact will be removed for good."}
+      </ConfirmDialog>
     </div>
   );
 }

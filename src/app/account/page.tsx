@@ -1,84 +1,95 @@
 "use client";
 
-import { useState } from "react";
 import { signOut } from "next-auth/react";
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { IconButton } from "@/components/ui/icon-button";
+import { useToast } from "@/components/ui/toast";
 import { api } from "@/trpc/provider";
 
 export default function AccountPage() {
-  const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [deleted, setDeleted] = useState(false);
-
+  const toast = useToast();
   const me = api.me.useQuery();
+  const utils = api.useUtils();
+  const [deleting, setDeleting] = useState(false);
   const deleteData = api.account.deleteData.useMutation({
     onSuccess: () => {
-      setError(null);
-      setDeleted(true);
-      setConfirming(false);
+      toast("Memory and Chat sessions deleted");
+      setDeleting(false);
+      void utils.memory.list.invalidate();
+      void utils.chat.sessions.invalidate();
     },
-    onError: (e) => setError(e.message),
+    onError: (e) => toast(e.message, { tone: "danger" }),
   });
 
-  if (me.isPending) return <p className="text-sm text-neutral-500">Loading…</p>;
-  if (me.error)
-    return <p className="text-sm text-red-600">Couldn&apos;t load account: {me.error.message}</p>;
+  // errors surface as toasts (Q3=A); old inline error paragraphs removed
+  useEffect(() => {
+    if (me.error) toast(me.error.message, { tone: "danger" });
+  }, [me.error, toast]);
+
+  if (me.isPending) return <p className="small muted">Loading…</p>;
 
   return (
-    <div className="max-w-2xl space-y-8">
-      <div className="space-y-1">
-        <h1 className="text-xl font-semibold">Account</h1>
-        <p className="text-sm text-neutral-800">{me.data.name ?? "Unnamed"}</p>
-        <p className="text-sm text-neutral-500">{me.data.email}</p>
-        <button
-          onClick={() => void signOut()}
-          className="mt-2 rounded border border-neutral-300 px-3 py-1.5 text-sm"
-        >
-          Sign out
-        </button>
-      </div>
+    <div>
+      <h1 className="page-title">Account</h1>
+      <p className="page-lead">Your profile and stored data.</p>
 
-      <div className="space-y-2 rounded border border-red-200 p-4">
-        <h2 className="text-sm font-semibold text-red-700">Delete my data</h2>
-        {deleted ? (
-          <p className="text-sm text-neutral-600">
-            Your Memory and Chat sessions have been deleted. Mail and calendar connections were
-            kept; disconnect them on the Connector screen if you want.
-          </p>
-        ) : (
-          <>
-            <p className="text-sm text-neutral-600">
-              Removes everything in Memory and all Chat sessions. Your Gmail and Calendar
-              connections stay connected until you disconnect them on the Connector screen. This
-              cannot be undone.
+      <article className="card-chai account-card">
+        <div className="row" style={{ gap: 16 }}>
+          <span
+            className="avatar"
+            style={{ width: 56, height: 56, fontSize: 18 }}
+            aria-hidden="true"
+          >
+            {me.data?.name?.charAt(0) ?? "U"}
+          </span>
+          <div className="grow">
+            <p style={{ fontWeight: 700, fontSize: 15 }}>
+              {me.data?.name ?? "Unnamed"}
             </p>
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            {confirming ? (
-              <div className="flex gap-2">
-                <button
-                  onClick={() => deleteData.mutate()}
-                  disabled={deleteData.isPending}
-                  className="rounded bg-red-600 px-3 py-1.5 text-sm text-white disabled:opacity-50"
-                >
-                  Yes, delete everything
-                </button>
-                <button
-                  onClick={() => setConfirming(false)}
-                  className="rounded border border-neutral-300 px-3 py-1.5 text-sm"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setConfirming(true)}
-                className="rounded border border-red-300 px-3 py-1.5 text-sm text-red-700"
-              >
-                Delete my data
-              </button>
-            )}
-          </>
-        )}
-      </div>
+            <p className="small muted">{me.data?.email}</p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 [&_svg:not([class*=size-])]:size-4"
+            onClick={() => void signOut()}
+          >
+            Sign out
+          </Button>
+        </div>
+      </article>
+
+      <article className="card-chai danger-card">
+        <h3>Delete my data</h3>
+        <p className="small muted">
+          Removes every fact in Memory and all Chat sessions. Gmail and Calendar connections stay
+          connected until you disconnect them on the Connectors screen. This cannot be undone.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5 [&_svg:not([class*=size-])]:size-4 border-red-500/45 text-red-600"
+          onClick={() => setDeleting(true)}
+        >
+          Delete my data
+        </Button>
+      </article>
+
+      <ConfirmDialog
+        open={deleting}
+        title="Delete your data?"
+        confirmLabel="Delete everything"
+        busyLabel="Deleting"
+        tone="danger"
+        typeToConfirm={me.data?.name ?? ""}
+        busy={deleteData.isPending}
+        onConfirm={() => deleteData.mutate()}
+        onCancel={() => setDeleting(false)}
+      >
+        {me.data?.name ? `Type "${me.data.name}" to confirm.` : "Type your name to confirm."}
+      </ConfirmDialog>
     </div>
   );
 }
