@@ -135,6 +135,12 @@
     transform: none;
     }
   }
+  @keyframes ping {
+  75%, 100% {
+    transform: scale(2);
+    opacity: 0;
+    }
+  }
   @keyframes chai-fade {
   from {
     opacity: 0;
@@ -446,30 +452,6 @@ body {
 }
 .main-narrow { max-width: 980px; margin: 0 auto; width: 100%; }
 
-.routine {
-  border-left: 1px solid var(--rail-border);
-  background: var(--sidebar-bg);
-  backdrop-filter: blur(8px);
-  padding: 22px 18px;
-  overflow-y: auto;
-}
-.routine-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-.routine-head h2 { font-size: 13px; font-weight: 700; color: var(--muted-foreground); }
-.day-label { font-size: 11.5px; font-weight: 700; color: var(--muted-foreground); margin-bottom: 10px; }
-.routine-item { margin-bottom: 14px; }
-.routine-item .time { font-size: 11.5px; color: var(--muted-foreground); font-family: var(--font-mono); }
-.routine-item .title { display: block; font-size: 13.5px; font-weight: 600; margin: 2px 0 4px; }
-.routine-links { display: flex; gap: 12px; font-size: 12px; }
-.routine-links a { color: var(--muted-foreground); transition: color 200ms ease; }
-.routine-links a:hover { color: var(--brand); }
-.routine-links a.join { color: var(--ok); }
-.routine-links a.join:hover { opacity: 0.8; }
-
 /* mobile top bar and drawer: closed by default */
 .mobile-top { display: none; }
 .scrim { display: none; }
@@ -585,6 +567,9 @@ body {
   white-space: nowrap;
 }
 button.chip { cursor: pointer; }
+.chip .dot,
+.status-text .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+.chip-special { color: var(--special); border-color: color-mix(in oklch, var(--special) 35%, transparent); }
 
 .msg { display: flex; gap: 12px; max-width: 760px; }
 /* proto `.msg .avatar`: monogram takes body type (Manrope), 12/700; the
@@ -628,12 +613,58 @@ button.chip { cursor: pointer; }
 
 /* status text + dot, never a coloured pill */
 .status-text { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
-.status-text .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
 .status-pending { color: var(--warn); }
 .status-approved,
 .status-executed { color: var(--ok); }
 .status-failed { color: var(--bad); }
 .status-discarded { color: var(--muted-foreground); }
+
+/* live status dot with ping animation, prototype-exact */
+.live-dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ok);
+}
+.live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  border: 1px solid var(--ok);
+  animation: ping 2.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* --------------------------------------------------------------------------
+   Connectors
+   -------------------------------------------------------------------------- */
+.connector-row {
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.connector-row + .connector-row { margin-top: 12px; }
+.connector-icon {
+  width: 42px;
+  height: 42px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--card-edge);
+  border-radius: var(--radius);
+  background: var(--card-fill);
+}
+.connector-icon svg { width: 20px; height: 20px; }
+
+/* --------------------------------------------------------------------------
+   Account
+   -------------------------------------------------------------------------- */
+.account-card { padding: 16px; }
+.avatar { display: inline-grid; place-items: center; border-radius: 999px; background: var(--card-fill); }
+.danger-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
 
 /* --------------------------------------------------------------------------
    Action log
@@ -655,6 +686,12 @@ time.timestamp { font-size: 11.5px; color: var(--muted-foreground); font-family:
 
 .chat-composer { padding-top: 14px; }
 .composer { display: flex; gap: 10px; align-items: center; }
+
+/* --------------------------------------------------------------------------
+   Memory
+   -------------------------------------------------------------------------- */
+.memory-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-top: 18px; }
+.memory-actions { display: flex; gap: 6px; margin-top: auto; }
 
 /* --------------------------------------------------------------------------
    Inbox
@@ -874,15 +911,6 @@ time.timestamp { font-size: 11.5px; color: var(--muted-foreground); font-family:
   .sidebar-toggle { display: none; }
 
   /* chat: the session list is desktop-only, per the prototype shot */
-  .chat-layout { grid-template-columns: 1fr; height: auto; }
-  .chat-sessions { display: none; }
-  .chat-restore { display: none; }
-  .chat-scroll { height: 52vh; }
-  .page-title { font-size: 20px; }
-  .kv { grid-template-columns: 1fr; gap: 2px; }
-  .kv dt { padding-top: 6px; }
-  .proposal-form .grid-2 { grid-template-columns: 1fr; }
-
   .scrim.is-open {
     display: block;
     position: fixed;
@@ -895,4 +923,57 @@ time.timestamp { font-size: 11.5px; color: var(--muted-foreground); font-family:
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* --------------------------------------------------------------------------
+   Sign in
+   -------------------------------------------------------------------------- */
+.auth-card {
+  padding: 32px;
+  max-width: 520px;
+  width: 100%;
+  text-align: center;
+}
+.animated-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--card-edge);
+  border-radius: 999px;
+  margin-bottom: 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+.glint {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--brand);
+}
+.glint::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  border: 1px solid var(--brand);
+  animation: ping 2.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+.highlight {
+  color: var(--highlight);
+}
+.lead {
+  font-size: 14px;
+  color: var(--muted-foreground);
+  max-width: 52ch;
+  margin: 0 auto 22px;
+}
+.auth-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 320px;
+  margin: 0 auto;
 }
