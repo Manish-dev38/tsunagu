@@ -246,6 +246,90 @@ describe("router seam: inbox", () => {
     await expect(caller.inbox.list()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await expect(caller.inbox.message({ id: "x" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await expect(caller.inbox.refresh()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(caller.inbox.page({})).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(caller.inbox.liveMessage({ id: "x" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("page pages the cache 25 at a time, newest-first, and stops when exhausted", async () => {
+    const corsair = new CorsairFake();
+    const msgs = Array.from({ length: 60 }, (_, i) =>
+      msg(`live${i}`, { internalDate: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString() }),
+    );
+    corsair.seedLiveMailbox("tenant_page", msgs);
+    const caller = makeCaller("tenant_page", db, corsair);
+    await caller.inbox.refresh();
+
+    const p1 = await caller.inbox.page({});
+    expect(p1.emails).toHaveLength(25);
+    expect(p1.hasMore).toBe(true);
+    expect(p1.nextPageToken).not.toBeNull();
+
+    const p2 = await caller.inbox.page({ cursor: p1.nextPageToken ?? undefined });
+    expect(p2.emails).toHaveLength(25);
+    expect(p2.hasMore).toBe(true);
+    const seen = new Set([...p1.emails.map((m) => m.id), ...p2.emails.map((m) => m.id)]);
+    expect(seen.size).toBe(50);
+
+    const p3 = await caller.inbox.page({ cursor: p2.nextPageToken ?? undefined });
+    expect(p3.emails).toHaveLength(10);
+    expect(p3.hasMore).toBe(false);
+    expect(p3.nextPageToken).toBeNull();
+  });
+
+  it("sync keeps the newest 200 rows, caps the cache there, and pages all of them", async () => {
+    const corsair = new CorsairFake();
+    corsair.seedLiveMailbox(
+      "tenant_cap",
+      Array.from({ length: 230 }, (_, i) =>
+        msg(`cap${i}`, { internalDate: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString() }),
+      ),
+    );
+    const caller = makeCaller("tenant_cap", db, corsair);
+
+    const refresh = await caller.inbox.refresh();
+    expect(refresh.synced).toBe(200);
+
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < 8; i++) {
+      const p = await caller.inbox.page({ cursor });
+      ids.push(...p.emails.map((m) => m.id));
+      cursor = p.nextPageToken ?? undefined;
+    }
+    expect(ids).toHaveLength(200);
+    expect(new Set(ids).size).toBe(200);
+    expect(cursor).toBeUndefined();
+    // the 30 oldest messages sit outside the window and were never fetched
+    await expect(caller.inbox.message({ id: "cap0" })).resolves.toBeNull();
+  });
+
+  it("page search/filter are per-combination streams", async () => {
+    const corsair = new CorsairFake();
+    corsair.seedLiveMailbox("tenant_pq", [
+      msg("q1", { subject: "Quarterly Report", labelIds: ["INBOX", "UNREAD"], internalDate: "2026-02-01T00:00:00.000Z" }),
+      msg("q2", { subject: "Lunch?", labelIds: ["INBOX"], internalDate: "2026-02-02T00:00:00.000Z" }),
+    ]);
+    const caller = makeCaller("tenant_pq", db, corsair);
+    await caller.inbox.refresh();
+
+    const unread = await caller.inbox.page({ filter: "unread" });
+    expect(unread.emails.map((m) => m.id)).toEqual(["q1"]);
+    const found = await caller.inbox.page({ query: "quarterly" });
+    expect(found.emails.map((m) => m.id)).toEqual(["q1"]);
+  });
+
+  it("liveMessage fetches a full message regardless of cache", async () => {
+    const corsair = new CorsairFake();
+    const html = "<div>Live body</div>";
+    corsair.seedLiveMailbox("tenant_lv", [msg("l1", { html, to: "me@example.com" })]);
+    const caller = makeCaller("tenant_lv", db, corsair);
+
+    await expect(caller.inbox.liveMessage({ id: "l1" })).resolves.toMatchObject({
+      id: "l1",
+      to: "me@example.com",
+      html,
+    });
+    await expect(caller.inbox.liveMessage({ id: "missing" })).resolves.toBeNull();
   });
 });
 

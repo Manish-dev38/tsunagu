@@ -18,6 +18,8 @@ export interface CachedMessage {
   internalDate: string;
   // original HTML for the reader; omitted on list rows (snippet view only)
   html?: string;
+  // true when the message carries attachments; omitted on cached list rows
+  attachments?: boolean;
 }
 
 export function normalizeInternalDate(raw: string): string {
@@ -62,6 +64,26 @@ export interface ListMessagesOptions {
   query?: string;
   limit?: number;
   offset?: number;
+}
+
+// Cache-first cursor pagination (infinite scroll): the list pages the synced
+// rows, so search/filter are local matches; the cursor is a numeric offset.
+export const PAGE_SIZE = 25;
+// How much inbox mail one sync keeps: the newest window, capped so the cache
+// cannot grow without bound.
+export const SYNC_WINDOW = 200;
+
+export interface PageMessagesOptions {
+  cursor?: string | null;
+  filter?: "all" | "unread";
+  query?: string;
+}
+
+export interface MessagePage {
+  emails: CachedMessage[];
+  nextPageToken: string | null;
+  hasMore: boolean;
+  unreadCount: number;
 }
 
 export interface SyncResult {
@@ -200,6 +222,8 @@ export interface CorsairPort extends MailboxWrites, CalendarWrites {
   listCachedMessages(tenantId: string, opts?: ListMessagesOptions): Promise<CachedMessage[]>;
   cachedUnreadCount(tenantId: string): Promise<number>;
   getCachedMessage(tenantId: string, messageId: string): Promise<CachedMessage | null>;
+  pageMessages(tenantId: string, opts?: PageMessagesOptions): Promise<MessagePage>;
+  fetchMessageLive(tenantId: string, messageId: string): Promise<CachedMessage | null>;
   listCachedEvents(tenantId: string, window: EventWindow): Promise<CachedEvent[]>;
   syncGmail(tenantId: string): Promise<SyncResult>;
   syncCalendar(tenantId: string): Promise<SyncResult>;
@@ -342,6 +366,26 @@ export class CorsairFake implements CorsairPort {
     return this.cache.get(tenantId)?.get(messageId) ?? null;
   }
 
+  async pageMessages(tenantId: string, opts: PageMessagesOptions = {}): Promise<MessagePage> {
+    const { cursor, filter = "all", query } = opts;
+    // mirrors the real adapter: cache-first, so a page is one local read
+    const cached = [...(this.cache.get(tenantId)?.values() ?? [])];
+    const matched = applyListOptions(cached, { filter, query, limit: cached.length });
+    const start = cursor ? Number(cursor) : 0;
+    const next = start + PAGE_SIZE < matched.length ? String(start + PAGE_SIZE) : null;
+    return {
+      emails: matched.slice(start, start + PAGE_SIZE).map((m) => ({ ...m })),
+      nextPageToken: next,
+      hasMore: next !== null,
+      unreadCount: cached.filter(isUnread).length,
+    };
+  }
+
+  async fetchMessageLive(tenantId: string, messageId: string): Promise<CachedMessage | null> {
+    const live = (this.liveMailbox.get(tenantId) ?? []).find((m) => m.id === messageId);
+    return live ? { ...live } : null;
+  }
+
   seedLiveMailbox(tenantId: string, messages: CachedMessage[]): void {
     this.liveMailbox.set(tenantId, messages);
   }
@@ -374,18 +418,30 @@ export class CorsairFake implements CorsairPort {
   }
 
   async syncGmail(tenantId: string): Promise<SyncResult> {
-    // mirrors the real adapter: the poll is INBOX-scoped, so archived mail leaves the cache
-    const live = (this.liveMailbox.get(tenantId) ?? []).filter((m) => m.labelIds.includes("INBOX"));
+    // mirrors the real adapter: newest SYNC_WINDOW inbox messages, delta only,
+    // rows archived elsewhere drop, older rows go only once the cap is passed
+    const live = (this.liveMailbox.get(tenantId) ?? [])
+      .filter((m) => m.labelIds.includes("INBOX"))
+      .sort((a, b) => b.internalDate.localeCompare(a.internalDate))
+      .slice(0, SYNC_WINDOW);
     const cache = this.cache.get(tenantId) ?? new Map<string, CachedMessage>();
     const liveIds = new Set(live.map((m) => m.id));
+    // a full window may hide older inbox mail, so only rows above its oldest
+    // message can be judged gone; a short window returned the whole inbox
+    const cutoff = live.length === SYNC_WINDOW ? live[live.length - 1].internalDate : null;
     let deleted = 0;
-    for (const id of [...cache.keys()]) {
-      if (!liveIds.has(id)) {
+    for (const [id, m] of [...cache]) {
+      if (!liveIds.has(id) && (cutoff === null || m.internalDate >= cutoff)) {
         cache.delete(id);
         deleted++;
       }
     }
     for (const m of live) cache.set(m.id, { ...m });
+    const overflow = [...cache.values()].sort((a, b) => a.internalDate.localeCompare(b.internalDate));
+    for (const m of overflow.slice(0, Math.max(0, cache.size - SYNC_WINDOW))) {
+      cache.delete(m.id);
+      deleted++;
+    }
     this.cache.set(tenantId, cache);
     return { syncedAt: new Date().toISOString(), synced: live.length, deleted };
   }

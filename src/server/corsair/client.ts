@@ -3,6 +3,8 @@ import { gmail } from "@corsair-dev/gmail";
 import { googlecalendar } from "@corsair-dev/googlecalendar";
 import { Pool } from "pg";
 import {
+  PAGE_SIZE,
+  SYNC_WINDOW,
   applyEventWindow,
   applyListOptions,
   inEventWindow,
@@ -18,6 +20,8 @@ import {
   type EventDateTime,
   type EventWindow,
   type ListMessagesOptions,
+  type MessagePage,
+  type PageMessagesOptions,
   type RescheduleEventInput,
   type SendEmailInput,
   type SyncResult,
@@ -27,6 +31,15 @@ import {
 
 let pool: Pool | undefined;
 let client: ReturnType<typeof createCorsair> | undefined;
+// one background fill per tenant: a Refresh click and a poll cycle must not
+// stack duplicate Gmail fetches for the same ids
+const fills = new Map<string, Promise<void>>();
+// a cache read decrypts every row (~4-5 s for 200 mails); scrolling asks for
+// one page at a time, so the parsed list is reused. Writes and every sync
+// invalidate it, so the TTL costs freshness only for mail that arrives elsewhere
+// (which no sync has seen either)
+const SNAPSHOTS_TTL_MS = 300_000;
+const snapshots = new Map<string, { at: number; messages: CachedMessage[] }>();
 
 export function getClient() {
   if (!client) {
@@ -76,32 +89,124 @@ export class RealCorsair implements CorsairPort {
 
   async syncGmail(tenantId: string): Promise<SyncResult> {
     const client = getClient().withTenant(tenantId);
-    // keep the poll light: latest 10 only (Gmail list is newest-first);
-    // INBOX-scoped so archived mail leaves the cache on the next sync;
-    // raise maxResults when search/history needs a deeper cache
-    // cast: corsair's generic client types collapse to any through the plugin chain
-    const res = (await client.gmail.api.messages.list({
-      maxResults: 10,
-      labelIds: ["INBOX"],
-    })) as {
-      messages?: { id?: string }[];
-    };
-    const liveIds = (res.messages ?? []).flatMap((m) => (m.id ? [m.id] : []));
-    for (const id of liveIds) {
-      // full fetch extracts subject/body/from/to; skip messages that vanish mid-sync
-      await client.gmail.api.messages.get({ id, format: "full" }).catch(() => undefined);
-    }
-    // deletions: cache rows the live mailbox no longer returns
+    // the newest SYNC_WINDOW inbox ids are the sync window; only ids missing
+    // from the cache get fetched, so a steady-state poll does no mail work
+    const liveIds = await this.inboxIds(tenantId, SYNC_WINDOW);
     const liveSet = new Set(liveIds);
+    const cachedRows = (await client.gmail.db.messages.list({ limit: 1000 })) as MessageEntityRow[];
+    const cachedIds = new Set(cachedRows.map((row) => row.entity_id));
+    const missing = liveIds.filter((id) => !cachedIds.has(id));
+    // the plugin writes each row through one at a time (~0.7 s), so 200 cold
+    // messages take minutes: fill in the background instead of blocking Refresh
+    // (an id list that changes while a fill runs is picked up by the next poll)
+    if (missing.length && !fills.has(tenantId)) {
+      fills.set(
+        tenantId,
+        this.fillMissing(tenantId, missing).finally(() => fills.delete(tenantId)),
+      );
+    }
+    // deletions: a cached row above the oldest message of a full window that
+    // Gmail no longer returns left the inbox (archived elsewhere). Rows below the
+    // window are kept, so the cache is not trimmed back to the newest page
+    const cutoff =
+      liveIds.length === SYNC_WINDOW
+        ? cachedRows.reduce<string | null>((min, row) => {
+            if (!liveSet.has(row.entity_id)) return min;
+            const date = toCachedMessage(row).internalDate;
+            return min === null || date < min ? date : min;
+          }, null)
+        : null;
     let deleted = 0;
-    const cached = (await client.gmail.db.messages.list({ limit: 1000 })) as MessageEntityRow[];
-    for (const entity of cached) {
-      if (!liveSet.has(entity.entity_id)) {
-        await client.gmail.db.messages.deleteByEntityId(entity.entity_id);
+    const survivors: { id: string; date: string }[] = [];
+    for (const row of cachedRows) {
+      const date = toCachedMessage(row).internalDate;
+      if (!liveSet.has(row.entity_id) && (cutoff === null || date >= cutoff)) {
+        await client.gmail.db.messages.deleteByEntityId(row.entity_id);
+        deleted++;
+      } else {
+        survivors.push({ id: row.entity_id, date });
+      }
+    }
+    // cap: past the window, the oldest rows go first
+    const overflow = survivors.length + missing.length - SYNC_WINDOW;
+    if (overflow > 0) {
+      survivors.sort((a, b) => a.date.localeCompare(b.date));
+      for (const row of survivors.slice(0, overflow)) {
+        await client.gmail.db.messages.deleteByEntityId(row.id);
         deleted++;
       }
     }
+    // however the cache changed above, the paged snapshot is stale now
+    snapshots.delete(tenantId);
     return { syncedAt: new Date().toISOString(), synced: liveIds.length, deleted };
+  }
+
+  // metadata only: headers + snippet is all the list needs, and a full message
+  // carries ~30 KB of body, which made every cache read drag megabytes.
+  // Bodies load on demand (getCachedMessage/fetchMessageLive).
+  // Gmail answers 403 Forbidden for part of a wide burst, so chunks stay small
+  // and one retry pass catches the rest; whatever still fails is simply missing
+  // from the cache and the next poll picks it up
+  private async fillMissing(tenantId: string, ids: string[]): Promise<void> {
+    const client = getClient().withTenant(tenantId);
+    const failed: string[] = [];
+    // rows land every few seconds; invalidating per chunk would re-read the whole
+    // cache that often, so a 10 s throttle keeps the first rows appearing early
+    let shownAt = Date.now();
+    const fetchChunks = async (batch: string[], size: number) => {
+      for (let i = 0; i < batch.length; i += size) {
+        const chunk = batch.slice(i, i + size);
+        const results = await Promise.all(
+          chunk.map((id) =>
+            client.gmail.api.messages
+              .get({ id, format: "metadata" })
+              .then(() => true)
+              .catch(() => false),
+          ),
+        );
+        results.forEach((ok, index) => {
+          if (!ok) failed.push(chunk[index]);
+        });
+        if (Date.now() - shownAt > 10_000) {
+          snapshots.delete(tenantId);
+          shownAt = Date.now();
+        }
+      }
+      snapshots.delete(tenantId);
+    };
+    await fetchChunks(ids, 10);
+    if (failed.length) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const retry = [...failed];
+      failed.length = 0;
+      await fetchChunks(retry, 5);
+    }
+  }
+
+  // ids only: the plugin's messages.list also writes every id through the cache
+  // one row at a time (~0.5 s each), which alone made a 200-message sync minutes.
+  // Falls back to the plugin when the raw call cannot auth, so the real OAuth
+  // error still surfaces.
+  private async inboxIds(tenantId: string, limit: number): Promise<string[]> {
+    const client = getClient().withTenant(tenantId);
+    const fromPlugin = async () =>
+      ((await client.gmail.api.messages.list({ maxResults: limit, labelIds: ["INBOX"] })) as {
+        messages?: { id?: string }[];
+      }).messages ?? [];
+    try {
+      const token = await client.gmail.keys.get_access_token();
+      if (!token) throw new Error("no access token");
+      const query = new URLSearchParams({ maxResults: String(limit), labelIds: "INBOX" });
+      const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${query}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) throw new Error(`Gmail list failed (${res.status})`);
+      const body = (await res.json()) as { messages?: { id?: string }[] };
+      return (body.messages ?? []).flatMap((m) => (m.id ? [m.id] : []));
+    } catch {
+      return (await fromPlugin()).flatMap((m) => (m.id ? [m.id] : []));
+    }
   }
 
   async syncCalendar(tenantId: string): Promise<SyncResult> {
@@ -192,30 +297,73 @@ export class RealCorsair implements CorsairPort {
   }
 
   async listCachedMessages(tenantId: string, opts: ListMessagesOptions = {}): Promise<CachedMessage[]> {
-    // shortcut: scans at most 500 cached rows and sorts in-process (entity client has no
+    // shortcut: scans at most 1000 cached rows and sorts in-process (entity client has no
     // server-side sort), upgrade to a DB-side sorted query when a mailbox outgrows it
-    const rows = (await getClient()
-      .withTenant(tenantId)
-      .gmail.db.messages.list({ limit: 500 })) as MessageEntityRow[];
-    return applyListOptions(rows.map(toCachedMessage), opts);
+    return applyListOptions(await this.cacheSnapshot(tenantId), opts);
   }
 
   async cachedUnreadCount(tenantId: string): Promise<number> {
-    // shortcut: scans at most 1000 cached rows, upgrade with an indexed count when needed
-    const rows = (await getClient()
-      .withTenant(tenantId)
-      .gmail.db.messages.list({ limit: 1000 })) as MessageEntityRow[];
-    return rows.filter((row) => isUnread(toCachedMessage(row))).length;
+    return (await this.cacheSnapshot(tenantId)).filter(isUnread).length;
   }
 
   async getCachedMessage(tenantId: string, messageId: string): Promise<CachedMessage | null> {
     const row = (await getClient()
       .withTenant(tenantId)
       .gmail.db.messages.findByEntityId(messageId)) as MessageEntityRow | null;
+    // sync stores metadata only, so a row without a body was never opened:
+    // read it live (that call also upgrades the row to the full message)
+    if (row && !row.data.body) return this.fetchMessageLive(tenantId, messageId);
     // original HTML rides only on the detail query; list rows stay snippet-sized
     return row
       ? { ...toCachedMessage(row), html: extractHtml(row.data.payload, row.data.body) }
       : null;
+  }
+
+  async pageMessages(tenantId: string, opts: PageMessagesOptions = {}): Promise<MessagePage> {
+    const { cursor, filter = "all", query } = opts;
+    const start = cursor ? Number(cursor) : 0;
+    // browse the cache: one local read, no Gmail calls, so scrolling is instant
+    const cached = await this.cacheSnapshot(tenantId);
+    const matched = applyListOptions(cached, { filter, query, limit: cached.length });
+    const next = start + PAGE_SIZE < matched.length ? String(start + PAGE_SIZE) : null;
+    return {
+      emails: matched.slice(start, start + PAGE_SIZE),
+      nextPageToken: next,
+      hasMore: next !== null,
+      unreadCount: cached.filter(isUnread).length,
+    };
+  }
+
+  // shortcut: reads at most 1000 cached rows and sorts in-process, move the
+  // sort into SQL when a mailbox outgrows the sync window
+  private async cacheSnapshot(tenantId: string): Promise<CachedMessage[]> {
+    const hit = snapshots.get(tenantId);
+    if (hit && Date.now() - hit.at < SNAPSHOTS_TTL_MS) return hit.messages;
+    const rows = (await getClient()
+      .withTenant(tenantId)
+      .gmail.db.messages.list({ limit: 1000 })) as MessageEntityRow[];
+    const messages = rows.map((row) => this.toLiveMessage(row));
+    snapshots.set(tenantId, { at: Date.now(), messages });
+    return messages;
+  }
+
+  async fetchMessageLive(tenantId: string, messageId: string): Promise<CachedMessage | null> {
+    const client = getClient().withTenant(tenantId);
+    // full format so the reader gets original HTML/body regardless of what the
+    // list has paged into the cache
+    await client.gmail.api.messages.get({ id: messageId, format: "full" }).catch(() => undefined);
+    const row = (await client.gmail.db.messages.findByEntityId(messageId).catch(() => null)) as MessageEntityRow | null;
+    // the row just grew a body, which the paged snapshot does not carry
+    snapshots.delete(tenantId);
+    return row ? this.toLiveMessage(row, true) : null;
+  }
+
+  private toLiveMessage(row: MessageEntityRow, withHtml = false): CachedMessage {
+    return {
+      ...toCachedMessage(row),
+      attachments: hasAttachments(row.data.payload),
+      ...(withHtml ? { html: extractHtml(row.data.payload, row.data.body) } : {}),
+    };
   }
 
   async sendEmail(tenantId: string, input: SendEmailInput) {
@@ -224,6 +372,7 @@ export class RealCorsair implements CorsairPort {
       `To: ${input.to}\r\nSubject: ${input.subject}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${input.body}`,
     ).toString("base64url");
     await getClient().withTenant(tenantId).gmail.api.messages.send({ raw });
+    snapshots.delete(tenantId);
   }
 
   async archiveMessage(tenantId: string, messageId: string) {
@@ -231,6 +380,7 @@ export class RealCorsair implements CorsairPort {
     await client.gmail.api.messages.modify({ id: messageId, removeLabelIds: ["INBOX"] });
     // drop from cache so the list reflects the archive before the next poll
     await client.gmail.db.messages.deleteByEntityId(messageId).catch(() => undefined);
+    snapshots.delete(tenantId);
   }
 
   async unarchiveMessage(tenantId: string, messageId: string) {
@@ -255,6 +405,7 @@ export class RealCorsair implements CorsairPort {
     });
     // full get write-throughs the fresh labelIds into the cache
     await client.gmail.api.messages.get({ id: messageId, format: "full" }).catch(() => undefined);
+    snapshots.delete(tenantId);
   }
 }
 
@@ -299,6 +450,17 @@ type EventEntityRow = {
     conferenceData?: { entryPoints?: { entryPointType?: string; uri?: string }[] | null } | null;
   };
 };
+
+type GmailPart = { mimeType?: string; filename?: string; parts?: GmailPart[] };
+
+function hasAttachments(payload: unknown): boolean {
+  // Gmail marks a part as an attachment by a non-empty filename, in the body
+  // (single-part) or anywhere in the multipart tree
+  if (!payload || typeof payload !== "object") return false;
+  const part = payload as GmailPart;
+  if (part.filename) return true;
+  return (part.parts ?? []).some(hasAttachments);
+}
 
 function toCachedEvent(row: EventEntityRow): CachedEvent {
   const videoEntry = row.data.conferenceData?.entryPoints?.find(

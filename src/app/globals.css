@@ -698,13 +698,15 @@ time.timestamp { font-size: 11.5px; color: var(--muted-foreground); font-family:
    -------------------------------------------------------------------------- */
 .inbox-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  /* give the reading pane more of the width than the list */
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
   gap: 0;
   height: calc(100vh - 130px);
   height: calc(100dvh - 130px);
 }
 .mail-list { border-right: 1px solid var(--rail-border); padding-right: 18px; overflow-y: auto; }
-.mail-detail { padding-left: 22px; overflow-y: auto; }
+.mail-detail { padding-left: 22px; overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
+.detail-stack { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .mail-row {
   display: block;
   width: 100%;
@@ -751,6 +753,10 @@ time.timestamp { font-size: 11.5px; color: var(--muted-foreground); font-family:
   background: var(--card-fill);
   padding: 22px;
   margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
 }
 .mail-frame h3 {
   font-family: var(--font-montserrat);
@@ -765,9 +771,19 @@ time.timestamp { font-size: 11.5px; color: var(--muted-foreground); font-family:
   color: color-mix(in oklch, var(--foreground) 90%, var(--muted-foreground));
 }
 .mail-body p { margin-bottom: 10px; }
-/* the email HTML canvas is white in both themes, by rule */
-.mail-canvas { margin-top: 14px; border-radius: calc(var(--radius) - 2px); overflow: hidden; background: #fff; }
-.mail-canvas iframe { display: block; width: 100%; height: 280px; border: 0; background: #fff; }
+/* the email HTML canvas is white in both themes, by rule; it grows past the
+   old fixed 280px to fill the reading pane's available height */
+.mail-canvas {
+  margin-top: 14px;
+  border-radius: calc(var(--radius) - 2px);
+  overflow: hidden;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 300px;
+}
+.mail-canvas iframe { display: block; width: 100%; border: 0; background: #fff; flex: 1; min-height: 300px; }
 
 .compose-card { padding: 16px; margin-bottom: 16px; animation: chai-fade 240ms ease both; }
 

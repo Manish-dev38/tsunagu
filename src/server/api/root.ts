@@ -120,6 +120,32 @@ const inboxRouter = router({
     .input(z.object({ id: z.string() }))
     .query(({ ctx, input }) => ctx.corsair.getCachedMessage(ctx.tenantId, input.id)),
 
+  // cache-first cursor pagination: the inbox list pages the synced rows
+  // (25/page) with local search/filter, so scrolling never waits on Gmail
+  page: protectedProcedure
+    .input(
+      z.object({
+        cursor: z.string().nullish(),
+        filter: z.enum(["all", "unread"]).optional(),
+        query: z.string().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const result = await ctx.corsair.pageMessages(ctx.tenantId, {
+        cursor: input.cursor,
+        filter: input.filter,
+        query: input.query,
+      });
+      // freshness line rides the first page only (no cursor yet)
+      const lastSyncedAt = input.cursor ? undefined : await getLastSync(ctx.db, ctx.tenantId, "gmail");
+      return { ...result, lastSyncedAt };
+    }),
+
+  // live single-message read: falls back to Gmail, not the list cache
+  liveMessage: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .query(({ ctx, input }) => ctx.corsair.fetchMessageLive(ctx.tenantId, input.id)),
+
   refresh: protectedProcedure.mutation(async ({ ctx }) => {
     const result = await ctx.corsair.syncGmail(ctx.tenantId);
     await recordSync(ctx.db, ctx.tenantId, "gmail", new Date(result.syncedAt));
